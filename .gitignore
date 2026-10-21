@@ -44,3 +44,4 @@ Thumbs.db
 *.backup-before-*
 *.ini.backup-*
 *.yml.backup-*
+.ansible/collections/

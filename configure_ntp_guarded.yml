@@ -4,46 +4,12 @@
   hosts: cisco_routers
   gather_facts: false
 
-  vars:
-    desired_ntp_server: "192.0.2.123"
-
   tasks:
     - name: Pre-check - read configured NTP servers
-      cisco.ios.ios_command:
-        commands:
-          - "show running-config | include ^ntp server"
-      register: ntp_precheck_result
-      ignore_errors: true
-      ignore_unreachable: true
+      ansible.builtin.import_tasks: tasks/ntp_read_config.yml
 
     - name: Classify pre-check result
-      ansible.builtin.set_fact:
-        ntp_precheck_status: >-
-          {{
-            'UNREACHABLE'
-            if ntp_precheck_result.unreachable | default(false)
-            else
-            'CONNECTION_FAILED'
-            if (
-              ntp_precheck_result.failed | default(false)
-              and 'timed out' in
-              (ntp_precheck_result.msg | default('') | lower)
-            )
-            else
-            'CHECK_FAILED'
-            if ntp_precheck_result.failed | default(false)
-            else
-            'CONFIG_MISSING'
-            if (
-              ntp_precheck_result.stdout_lines[0]
-              | default([])
-              | select('search', '^ntp server ' ~ desired_ntp_server ~ '$')
-              | list
-              | length
-            ) == 0
-            else
-            'READY'
-          }}
+      ansible.builtin.import_tasks: tasks/ntp_classify_result.yml
 
     - name: Change - configure NTP only when missing
       cisco.ios.ios_config:

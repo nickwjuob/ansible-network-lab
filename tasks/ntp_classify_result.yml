@@ -1,0 +1,34 @@
+---
+- name: Classify NTP pre-check result
+  ansible.builtin.set_fact:
+    ntp_precheck_status: >-
+      {{
+        'UNREACHABLE'
+        if ntp_precheck_result.unreachable | default(false)
+        else
+        'CONNECTION_FAILED'
+        if (
+          ntp_precheck_result.failed | default(false)
+          and (
+            'timed out' in (ntp_precheck_result.msg | default('') | lower)
+            or
+            'connection' in (ntp_precheck_result.msg | default('') | lower)
+            or
+            'authentication' in (ntp_precheck_result.msg | default('') | lower)
+          )
+        )
+        else
+        'CHECK_FAILED'
+        if ntp_precheck_result.failed | default(false)
+        else
+        'CHECK_FAILED'
+        if ntp_precheck_result.stdout_lines is not defined
+        else
+        'CONFIG_MISSING'
+        if ntp_precheck_lines | length == 0
+        else
+        'READY'
+        if ntp_precheck_lines == ['ntp server ' ~ desired_ntp_server]
+        else
+        'CONFIG_MISMATCH'
+      }}
