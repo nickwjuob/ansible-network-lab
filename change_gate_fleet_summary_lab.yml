@@ -1,0 +1,131 @@
+---
+- name: Test fleet-wide change summary locally
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    fleet_results:
+      - device: R1
+        status: SUCCESS
+
+      - device: R2
+        status: RECOVERED
+
+      - device: R3
+        status: RECOVERY_FAILED
+
+      - device: R4
+        status: BLOCKED
+
+      - device: R5
+        status: SKIP_NO_CHANGE
+
+      - device: R6
+        status: UNKNOWN
+
+  tasks:
+    - name: Count devices by lifecycle status
+      ansible.builtin.set_fact:
+        fleet_total: "{{ fleet_results | length }}"
+        success_count: >-
+          {{
+            fleet_results
+            | selectattr('status', 'equalto', 'SUCCESS')
+            | list | length
+          }}
+        recovered_count: >-
+          {{
+            fleet_results
+            | selectattr('status', 'equalto', 'RECOVERED')
+            | list | length
+          }}
+        recovery_failed_count: >-
+          {{
+            fleet_results
+            | selectattr('status', 'equalto', 'RECOVERY_FAILED')
+            | list | length
+          }}
+        blocked_count: >-
+          {{
+            fleet_results
+            | selectattr('status', 'equalto', 'BLOCKED')
+            | list | length
+          }}
+        skipped_count: >-
+          {{
+            fleet_results
+            | selectattr('status', 'equalto', 'SKIP_NO_CHANGE')
+            | list | length
+          }}
+        unknown_count: >-
+          {{
+            fleet_results
+            | selectattr('status', 'equalto', 'UNKNOWN')
+            | list | length
+          }}
+
+    - name: Calculate fleet attention and audit status
+      ansible.builtin.set_fact:
+        attention_required_count: >-
+          {{
+            recovery_failed_count | int
+            + blocked_count | int
+            + unknown_count | int
+          }}
+        manual_intervention_required: >-
+          {{
+            (recovery_failed_count | int > 0)
+            or (unknown_count | int > 0)
+          }}
+        audit_complete: "{{ unknown_count | int == 0 }}"
+        fleet_outcome: >-
+          {{
+            'ACTION_REQUIRED'
+            if (
+              recovery_failed_count | int > 0
+              or blocked_count | int > 0
+              or unknown_count | int > 0
+            )
+            else
+            'COMPLETED_WITH_RECOVERY'
+            if recovered_count | int > 0
+            else
+            'COMPLETE_SUCCESS'
+          }}
+
+    - name: Display fleet-wide summary
+      ansible.builtin.debug:
+        msg:
+          devices_total: "{{ fleet_total }}"
+          success: "{{ success_count }}"
+          recovered: "{{ recovered_count }}"
+          recovery_failed: "{{ recovery_failed_count }}"
+          blocked: "{{ blocked_count }}"
+          skipped_no_change: "{{ skipped_count }}"
+          unknown: "{{ unknown_count }}"
+          attention_required: "{{ attention_required_count }}"
+          manual_intervention_required: "{{ manual_intervention_required }}"
+          audit_complete: "{{ audit_complete }}"
+          fleet_outcome: "{{ fleet_outcome }}"
+
+    - name: Validate expected summary
+      ansible.builtin.assert:
+        that:
+          - fleet_total | int == 6
+          - success_count | int == 1
+          - recovered_count | int == 1
+          - recovery_failed_count | int == 1
+          - blocked_count | int == 1
+          - skipped_count | int == 1
+          - unknown_count | int == 1
+          - attention_required_count | int == 3
+          - manual_intervention_required | bool
+          - not (audit_complete | bool)
+          - fleet_outcome == 'ACTION_REQUIRED'
+        success_msg: >-
+          Fleet summary verified:
+          all six device results and fleet status are correct.
+        fail_msg: >-
+          Fleet summary mismatch:
+          inspect the counts and calculated status.

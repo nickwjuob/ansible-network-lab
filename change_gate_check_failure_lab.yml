@@ -1,0 +1,67 @@
+---
+- name: Test Change Gate check failure handling locally
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    check_cases:
+      - device: R1
+        check_complete: true
+        health: UNHEALTHY
+        expected_decision: ALLOW_REMEDIATION
+
+      - device: R2
+        check_complete: true
+        health: HEALTHY
+        expected_decision: SKIP_NO_CHANGE
+
+      - device: R3
+        check_complete: false
+        health: UNKNOWN
+        expected_decision: BLOCK
+
+  tasks:
+    - name: Calculate Change Gate decision
+      ansible.builtin.set_fact:
+        check_gate_decision: >-
+          {{
+            'BLOCK'
+            if not (item.check_complete | bool)
+            or item.health == 'UNKNOWN'
+            else
+            'SKIP_NO_CHANGE'
+            if item.health == 'HEALTHY'
+            else
+            'ALLOW_REMEDIATION'
+            if item.health == 'UNHEALTHY'
+            else
+            'BLOCK'
+          }}
+      loop: "{{ check_cases }}"
+      loop_control:
+        label: "{{ item.device }}"
+      register: decision_results
+
+    - name: Display each decision
+      ansible.builtin.debug:
+        msg:
+          device: "{{ item.item.device }}"
+          check_complete: "{{ item.item.check_complete }}"
+          health: "{{ item.item.health }}"
+          decision: "{{ item.ansible_facts.check_gate_decision }}"
+      loop: "{{ decision_results.results }}"
+      loop_control:
+        label: "{{ item.item.device }}"
+
+    - name: Verify decisions match expectations
+      ansible.builtin.assert:
+        that:
+          - >-
+            item.ansible_facts.check_gate_decision
+            == item.item.expected_decision
+        success_msg: "{{ item.item.device }} decision verified"
+        fail_msg: "{{ item.item.device }} decision mismatch"
+      loop: "{{ decision_results.results }}"
+      loop_control:
+        label: "{{ item.item.device }}"

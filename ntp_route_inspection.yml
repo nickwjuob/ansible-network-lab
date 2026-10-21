@@ -1,0 +1,19 @@
+---
+- name: Inspect routing tables for NTP troubleshooting
+  hosts: cisco_routers
+  gather_facts: false
+
+  tasks:
+    - name: Read routing table and default route
+      cisco.ios.ios_command:
+        commands:
+          - "show ip route"
+          - "show ip route 0.0.0.0"
+      register: route_inspection_result
+
+    - name: Display routing evidence
+      ansible.builtin.debug:
+        msg:
+          device: "{{ inventory_hostname }}"
+          routing_table: "{{ route_inspection_result.stdout[0] }}"
+          default_route_lookup: "{{ route_inspection_result.stdout[1] }}"

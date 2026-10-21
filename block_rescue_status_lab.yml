@@ -1,0 +1,52 @@
+---
+- name: Track business outcome separately from Ansible task status
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    workflow_status: "IN_PROGRESS"
+
+  tasks:
+    - name: Simulate a network change workflow
+      block:
+        - name: Pre-change check
+          ansible.builtin.debug:
+            msg: "Pre-change check passed"
+
+        - name: Simulate configuration failure
+          ansible.builtin.fail:
+            msg: "Simulated configuration failure"
+
+        - name: Verify configuration
+          ansible.builtin.debug:
+            msg: "Configuration verification passed"
+
+        - name: Mark workflow successful
+          ansible.builtin.set_fact:
+            workflow_status: "SUCCESS"
+
+      rescue:
+        - name: Record failed workflow
+          ansible.builtin.set_fact:
+            workflow_status: "FAILED"
+
+        - name: Record recovery attempt
+          ansible.builtin.set_fact:
+            workflow_status: "RECOVERY_ATTEMPTED"
+
+        - name: Explain recovery status
+          ansible.builtin.debug:
+            msg: >-
+              The original workflow failed.
+              Recovery was recorded as attempted,
+              but recovery has not been verified.
+
+      always:
+        - name: Report business outcome
+          ansible.builtin.debug:
+            msg:
+              workflow_status: "{{ workflow_status }}"
+              note: >-
+                This is the workflow outcome, not merely
+                the Ansible PLAY RECAP status.

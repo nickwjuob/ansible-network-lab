@@ -1,0 +1,19 @@
+---
+- name: Inspect NTP operational state on Cisco IOS routers
+  hosts: cisco_routers
+  gather_facts: false
+
+  tasks:
+    - name: Read NTP operational status and associations
+      cisco.ios.ios_command:
+        commands:
+          - "show ntp status"
+          - "show ntp associations"
+      register: ntp_operational_result
+
+    - name: Display raw NTP operational output
+      ansible.builtin.debug:
+        msg:
+          device: "{{ inventory_hostname }}"
+          ntp_status: "{{ ntp_operational_result.stdout[0] }}"
+          ntp_associations: "{{ ntp_operational_result.stdout[1] }}"

@@ -1,0 +1,254 @@
+
+---
+- name: Verify saved evidence integrity
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    integrity_lab_id: "{{ integrity_lab_id_input | default('integrity-lab-001') }}"
+    integrity_lab_dir: "{{ playbook_dir }}/evidence/{{ integrity_lab_id }}"
+    manifest_path: "{{ integrity_lab_dir }}/integrity_manifest.json"
+
+  tasks:
+    - name: Validate integrity lab ID before accessing files
+      ansible.builtin.assert:
+        that:
+          - integrity_lab_id is match('^integrity-lab-[0-9]{3}$')
+        fail_msg: >-
+          Invalid integrity lab ID. Expected format:
+          integrity-lab-NNN, where NNN contains exactly three digits.
+        success_msg: "Integrity lab ID format is valid."
+
+    - name: Check whether integrity manifest exists
+      ansible.builtin.stat:
+        path: "{{ manifest_path }}"
+      register: manifest_file
+
+    - name: Require integrity manifest to exist
+      ansible.builtin.assert:
+        that:
+          - manifest_file.stat.exists
+          - manifest_file.stat.isreg
+        fail_msg: "Integrity manifest is missing or is not a regular file."
+        success_msg: "Integrity manifest found."
+
+    - name: Read integrity manifest
+      ansible.builtin.slurp:
+        src: "{{ manifest_path }}"
+      register: manifest_content
+
+    - name: Parse integrity manifest
+      block:
+        - name: Convert manifest JSON into Ansible data
+          ansible.builtin.set_fact:
+            integrity_manifest: >-
+              {{
+                manifest_content.content
+                | b64decode
+                | from_json
+              }}
+
+      rescue:
+        - name: Report manifest JSON parsing failure
+          ansible.builtin.debug:
+            msg: >-
+              Manifest parsing failed. The manifest file is not valid JSON.
+              File: {{ manifest_path }}
+
+        - name: Stop because manifest JSON is invalid
+          ansible.builtin.fail:
+            msg: >-
+              Integrity audit aborted. The manifest could not be parsed.
+              No file integrity checks were performed.
+
+    - name: Validate manifest structure
+      ansible.builtin.assert:
+        that:
+          - integrity_manifest.manifest_version == 1
+          - integrity_manifest.audit_run_id == integrity_lab_id
+          - integrity_manifest.hash_algorithm == 'sha256'
+          - integrity_manifest.files | length > 0
+        fail_msg: "Integrity manifest failed validation."
+        success_msg: "Integrity manifest structure is valid."
+
+    - name: Require every manifest file entry to be a mapping
+      ansible.builtin.assert:
+        that:
+          - item is mapping
+        fail_msg: "Manifest file entry must be a JSON object."
+      loop: "{{ integrity_manifest.files }}"
+      loop_control:
+        label: "Manifest entry"
+
+    - name: Require path and sha256 fields in every entry
+      ansible.builtin.assert:
+        that:
+          - "'path' in item"
+          - "'sha256' in item"
+        fail_msg: "Manifest file entry must contain path and sha256."
+      loop: "{{ integrity_manifest.files }}"
+      loop_control:
+        label: "{{ item.path | default('Missing path') }}"
+
+    - name: Validate path and SHA-256 field formats
+      ansible.builtin.assert:
+        that:
+          - item.path is string
+          - item.path | length > 0
+          - item.sha256 is string
+          - item.sha256 is match('^[0-9a-fA-F]{64}$')
+        fail_msg: >-
+          Invalid manifest entry. Path must be a non-empty string,
+          and sha256 must contain exactly 64 hexadecimal characters.
+      loop: "{{ integrity_manifest.files }}"
+      loop_control:
+        label: "{{ item.path | default('Missing path') }}"
+
+    - name: Validate raw manifest paths before resolving
+      ansible.builtin.assert:
+        that:
+          - item.path is string
+          - item.path is match('^evidence/' ~ integrity_lab_id ~ '/')
+          - item.path == (item.path | replace('\\', ''))
+          - "not (item.path.startswith('/'))"
+          - "'..' not in item.path.split('/')"
+        fail_msg: >-
+          Unsafe manifest path. The path must be a relative path
+          inside the current integrity lab directory.
+        success_msg: "Raw manifest path format is valid."
+      loop: "{{ integrity_manifest.files }}"
+      loop_control:
+        label: "{{ item.path }}"
+
+    - name: Resolve manifest paths once
+      ansible.builtin.set_fact:
+        resolved_manifest_files: >-
+          {{
+            (resolved_manifest_files | default([]))
+            +
+            [
+              item | combine({
+                'resolved_path': (
+                  playbook_dir ~ '/' ~ item.path
+                ) | realpath
+              })
+            ]
+          }}
+      loop: "{{ integrity_manifest.files }}"
+      loop_control:
+        label: "{{ item.path }}"
+
+    - name: Validate resolved paths stay inside the current lab
+      ansible.builtin.assert:
+        that:
+          - >-
+            item.resolved_path is regex(
+              '^' ~
+              ((
+                playbook_dir ~ '/evidence/' ~ integrity_lab_id
+              ) | realpath | regex_escape) ~
+              '(/|$)'
+            )
+        fail_msg: >-
+          Unsafe manifest path. The resolved path must remain
+          inside the current integrity lab directory.
+        success_msg: "Resolved path is within the allowed lab directory."
+      loop: "{{ resolved_manifest_files }}"
+      loop_control:
+        label: "{{ item.path }}"
+
+    - name: Calculate SHA-256 for every manifest file
+      ansible.builtin.stat:
+        path: "{{ item.resolved_path }}"
+        checksum_algorithm: sha256
+      loop: "{{ resolved_manifest_files }}"
+      loop_control:
+        label: "{{ item.path }}"
+      register: integrity_file_checks
+
+    - name: Display collected integrity check results
+      ansible.builtin.debug:
+        var: integrity_file_checks
+
+    - name: Display per-file integrity results
+      ansible.builtin.debug:
+        msg:
+          - "File: {{ item.item.path }}"
+          - "Exists: {{ item.stat.exists | default(false) }}"
+          - "Regular file: {{ item.stat.isreg | default(false) }}"
+          - "Expected SHA-256: {{ item.item.sha256 }}"
+          - "Actual SHA-256: {{ item.stat.checksum | default('UNAVAILABLE') }}"
+          - >-
+            Hash matches:
+            {{
+              (item.stat.exists | default(false))
+              and (item.stat.isreg | default(false))
+              and (item.stat.checksum | default(''))
+              == item.item.sha256
+            }}
+      loop: "{{ integrity_file_checks.results }}"
+      loop_control:
+        label: "{{ item.item.path }}"
+
+    - name: Build per-file integrity results
+      ansible.builtin.set_fact:
+        integrity_file_results: >-
+          {{
+            (integrity_file_results | default([]))
+            +
+            [
+              {
+                'path': item.item.path,
+                'exists': item.stat.exists | default(false),
+                'is_regular_file': item.stat.isreg | default(false),
+                'hash_matches': (
+                  (item.stat.exists | default(false))
+                  and (item.stat.isreg | default(false))
+                  and (
+                    (item.stat.checksum | default(''))
+                    == item.item.sha256
+                  )
+                ),
+                'expected_sha256': item.item.sha256,
+                'actual_sha256': item.stat.checksum | default('UNAVAILABLE')
+              }
+            ]
+          }}
+      loop: "{{ integrity_file_checks.results }}"
+      loop_control:
+        label: "{{ item.item.path }}"
+
+    - name: Display aggregated file results
+      ansible.builtin.debug:
+        var: integrity_file_results
+
+
+    - name: Determine overall integrity audit status
+      ansible.builtin.set_fact:
+        integrity_audit_status: >-
+          {{
+            'PASS'
+            if (
+              integrity_file_results
+              | selectattr('hash_matches', 'equalto', false)
+              | list
+              | length == 0
+            )
+            else 'FAIL'
+          }}
+
+    - name: Display overall integrity audit status
+      ansible.builtin.debug:
+        msg: "Overall integrity audit status: {{ integrity_audit_status }}"
+
+
+    - name: Require overall integrity audit to pass
+      ansible.builtin.assert:
+        that:
+          - integrity_audit_status == 'PASS'
+        fail_msg: >-
+          Integrity audit FAILED. One or more files are missing,
+          are not regular files, or do not match the expected SHA-256.
+        success_msg: >-
+          Integrity audit PASSED. All manifest files passed validation.

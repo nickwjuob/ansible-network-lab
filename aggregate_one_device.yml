@@ -1,0 +1,92 @@
+---
+- name: Record missing device audit result
+  ansible.builtin.set_fact:
+    consolidated_audit_report: >-
+      {{
+        consolidated_audit_report
+        + [
+            {
+              'device': audit_file.item,
+              'interface': 'GigabitEthernet0/0',
+              'audit_status': 'UNKNOWN',
+              'collection_status': 'UNKNOWN',
+              'status': 'NO_AUDIT_RESULT'
+            }
+          ]
+      }}
+  when:
+    - not audit_file.stat.exists
+    - not (
+        audit_run_id == '20261018-008'
+        and audit_file.item == 'R2'
+        and (inject_read_failure | default(false) | bool)
+      )
+
+- name: Add valid device audit result
+  when:
+    - >-
+      audit_file.stat.exists
+      or
+      (
+        audit_run_id == '20261018-008'
+        and audit_file.item == 'R2'
+        and (inject_read_failure | default(false) | bool)
+      )
+  block:
+    - name: Read device audit file
+      ansible.builtin.slurp:
+        src: >-
+          {{
+            playbook_dir ~ '/evidence/' ~ audit_run_id ~ '/'
+            ~ (
+                'R2_read_failure_test.json'
+                if (
+                  audit_run_id == '20261018-008'
+                  and audit_file.item == 'R2'
+                  and (inject_read_failure | default(false) | bool)
+                )
+                else audit_file.item ~ '_audit.json'
+              )
+          }}
+      register: audit_file_content
+
+    - name: Parse device audit JSON
+      ansible.builtin.set_fact:
+        parsed_device_audit: >-
+          {{
+            audit_file_content.content
+            | b64decode
+            | from_json
+          }}
+
+    - name: Append valid audit result
+      ansible.builtin.set_fact:
+        consolidated_audit_report: >-
+          {{
+            consolidated_audit_report + [parsed_device_audit]
+          }}
+
+  rescue:
+    - name: Record device audit file error
+      ansible.builtin.set_fact:
+        consolidated_audit_report: >-
+          {{
+            consolidated_audit_report
+            + [
+                {
+                  'device': audit_file.item,
+                  'interface': 'GigabitEthernet0/0',
+                  'audit_status': 'UNKNOWN',
+                  'collection_status': (
+                    'AUDIT_FILE_READ_ERROR'
+                    if (audit_file_content.failed | default(false) | bool)
+                    else 'INVALID_AUDIT_JSON'
+                  ),
+                  'status': (
+                    'AUDIT_FILE_READ_ERROR'
+                    if (audit_file_content.failed | default(false) | bool)
+                    else 'INVALID_AUDIT_JSON'
+                  )
+                }
+              ]
+          }}

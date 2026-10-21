@@ -1,0 +1,115 @@
+---
+- name: Test NTP pre-check classification using local sample data
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    expected_ntp_line: "ntp server 192.0.2.123"
+
+    test_cases:
+      - name: Exact expected configuration
+        unreachable: false
+        failed: false
+        output_present: true
+        lines:
+          - "ntp server 192.0.2.123"
+        msg: ""
+        expected: READY
+
+      - name: No NTP configuration
+        unreachable: false
+        failed: false
+        output_present: true
+        lines: []
+        msg: ""
+        expected: CONFIG_MISSING
+
+      - name: Additional NTP server configured
+        unreachable: false
+        failed: false
+        output_present: true
+        lines:
+          - "ntp server 192.0.2.123"
+          - "ntp server 192.0.2.124"
+        msg: ""
+        expected: CONFIG_MISMATCH
+
+      - name: Command execution failed
+        unreachable: false
+        failed: true
+        output_present: false
+        lines: []
+        msg: "invalid command"
+        expected: CHECK_FAILED
+
+      - name: Command output missing
+        unreachable: false
+        failed: false
+        output_present: false
+        lines: []
+        msg: ""
+        expected: CHECK_FAILED
+
+      - name: SSH connection timed out
+        unreachable: false
+        failed: true
+        output_present: false
+        lines: []
+        msg: "timed out"
+        expected: CONNECTION_FAILED
+
+  tasks:
+    - name: Classify each simulated test case
+      ansible.builtin.set_fact:
+        test_actual_status: >-
+          {{
+            'UNREACHABLE'
+            if item.unreachable | default(false)
+            else
+            'CONNECTION_FAILED'
+            if (
+              item.failed | default(false)
+              and
+              (
+                'timed out' in (item.msg | default('') | lower)
+                or
+                'connection' in (item.msg | default('') | lower)
+                or
+                'authentication' in (item.msg | default('') | lower)
+              )
+            )
+            else
+            'CHECK_FAILED'
+            if item.failed | default(false)
+            else
+            'CHECK_FAILED'
+            if not (item.output_present | default(false))
+            else
+            'CONFIG_MISSING'
+            if item.lines | length == 0
+            else
+            'READY'
+            if item.lines == [expected_ntp_line]
+            else
+            'CONFIG_MISMATCH'
+          }}
+      loop: "{{ test_cases }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: classification_results
+
+    - name: Assert each result matches the expected status
+      ansible.builtin.assert:
+        that:
+          - item.ansible_facts.test_actual_status == item.item.expected
+        success_msg: >-
+          PASS: {{ item.item.name }} ->
+          {{ item.ansible_facts.test_actual_status }}
+        fail_msg: >-
+          FAIL: {{ item.item.name }} ->
+          expected {{ item.item.expected }},
+          got {{ item.ansible_facts.test_actual_status }}
+      loop: "{{ classification_results.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"

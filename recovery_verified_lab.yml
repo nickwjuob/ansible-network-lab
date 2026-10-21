@@ -1,0 +1,69 @@
+---
+- name: Verify a simulated recovery result
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    device_name: R1
+
+  tasks:
+    - name: Initialize business status
+      ansible.builtin.set_fact:
+        change_status: CHANGE_ATTEMPTED
+        recovery_status: NOT_ATTEMPTED
+        recovery_verification_status: NOT_RUN
+        final_config_status: UNKNOWN
+
+    - name: Simulate failed change and verified recovery
+      block:
+        - name: Simulate configuration failure
+          ansible.builtin.fail:
+            msg: "SIMULATED ERROR: configuration task failed."
+
+      rescue:
+        - name: Record the original change failure
+          ansible.builtin.set_fact:
+            change_status: CHANGE_FAILED
+
+        - name: Record recovery attempt
+          ansible.builtin.set_fact:
+            recovery_status: RECOVERY_ATTEMPTED
+
+        - name: Simulate recovery action
+          ansible.builtin.debug:
+            msg: >-
+              SIMULATION ONLY: recovery action completed
+              without reporting an error.
+
+        - name: Simulate successful recovery post-check
+          ansible.builtin.set_fact:
+            recovery_verification_status: VERIFIED
+            final_config_status: RESTORED_TO_BASELINE
+
+        - name: Report successful recovery verification
+          ansible.builtin.debug:
+            msg: >-
+              SIMULATION ONLY: post-check confirms that
+              the expected baseline state is present.
+
+      always:
+        - name: Report final business status
+          ansible.builtin.debug:
+            msg:
+              device: "{{ device_name }}"
+              change_status: "{{ change_status }}"
+              recovery_status: "{{ recovery_status }}"
+              recovery_verification_status: "{{ recovery_verification_status }}"
+              final_config_status: "{{ final_config_status }}"
+
+    - name: Validate the business report
+      ansible.builtin.assert:
+        that:
+          - change_status == 'CHANGE_FAILED'
+          - recovery_status == 'RECOVERY_ATTEMPTED'
+          - recovery_verification_status == 'VERIFIED'
+          - final_config_status == 'RESTORED_TO_BASELINE'
+        success_msg: >-
+          PASS: The original change failed, and the simulated
+          post-check verified the expected baseline state.

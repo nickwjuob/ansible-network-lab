@@ -1,0 +1,22 @@
+---
+- name: Read-only NTP network diagnostics
+  hosts: cisco_routers
+  gather_facts: false
+
+  tasks:
+    - name: Collect routing and NTP evidence
+      cisco.ios.ios_command:
+        commands:
+          - "show ip route 192.0.2.123"
+          - "show ntp status"
+          - "show ntp associations"
+      register: ntp_diagnostic_result
+
+    - name: Display diagnostic evidence
+      ansible.builtin.debug:
+        msg:
+          device: "{{ inventory_hostname }}"
+          target: "192.0.2.123"
+          route_lookup: "{{ ntp_diagnostic_result.stdout[0] }}"
+          ntp_status: "{{ ntp_diagnostic_result.stdout[1] }}"
+          ntp_associations: "{{ ntp_diagnostic_result.stdout[2] }}"

@@ -1,0 +1,58 @@
+---
+- name: Test post-check outcomes using local sample data
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    expected_ntp_line: "ntp server 192.0.2.123"
+
+    postcheck_cases:
+      - name: Expected configuration is present
+        check_available: true
+        observed_lines:
+          - "ntp server 192.0.2.123"
+        expected_status: SUCCESS
+
+      - name: Expected configuration is absent
+        check_available: true
+        observed_lines: []
+        expected_status: POSTCHECK_FAILED
+
+      - name: Post-check command timed out
+        check_available: false
+        observed_lines: []
+        expected_status: POSTCHECK_UNKNOWN
+
+  tasks:
+    - name: Classify simulated post-check results
+      ansible.builtin.set_fact:
+        postcheck_actual_status: >-
+          {{
+            'POSTCHECK_UNKNOWN'
+            if not item.check_available
+            else
+            'SUCCESS'
+            if expected_ntp_line in item.observed_lines
+            else
+            'POSTCHECK_FAILED'
+          }}
+      loop: "{{ postcheck_cases }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: postcheck_results
+
+    - name: Assert each post-check outcome
+      ansible.builtin.assert:
+        that:
+          - item.ansible_facts.postcheck_actual_status == item.item.expected_status
+        success_msg: >-
+          PASS: {{ item.item.name }} ->
+          {{ item.ansible_facts.postcheck_actual_status }}
+        fail_msg: >-
+          FAIL: {{ item.item.name }} ->
+          expected {{ item.item.expected_status }},
+          got {{ item.ansible_facts.postcheck_actual_status }}
+      loop: "{{ postcheck_results.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"

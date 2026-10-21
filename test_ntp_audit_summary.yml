@@ -1,0 +1,76 @@
+---
+- name: Test NTP audit summary rules locally
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    failure_states:
+      - CONNECTION_TIMEOUT
+      - UNREACHABLE
+      - CHECK_FAILED
+
+    test_cases:
+      - name: All devices match
+        statuses: [MATCH, MATCH, MATCH]
+        expected_audit: AUDIT_COMPLETE
+        expected_compliance: COMPLIANT
+
+      - name: All checks complete but drift exists
+        statuses: [MATCH, DRIFT, MATCH]
+        expected_audit: AUDIT_COMPLETE
+        expected_compliance: NON_COMPLIANT
+
+      - name: Timeout without confirmed drift
+        statuses: [MATCH, CONNECTION_TIMEOUT, MATCH]
+        expected_audit: AUDIT_INCOMPLETE
+        expected_compliance: UNKNOWN
+
+      - name: Timeout and confirmed drift
+        statuses: [MATCH, CONNECTION_TIMEOUT, DRIFT]
+        expected_audit: AUDIT_INCOMPLETE
+        expected_compliance: NON_COMPLIANT
+
+  tasks:
+    - name: Calculate audit and compliance status for each case
+      ansible.builtin.set_fact:
+        calculated_audit: >-
+          {{
+            'AUDIT_INCOMPLETE'
+            if (
+              item.statuses
+              | select('in', failure_states)
+              | list
+              | length > 0
+            )
+            else 'AUDIT_COMPLETE'
+          }}
+        calculated_compliance: >-
+          {{
+            'NON_COMPLIANT'
+            if 'DRIFT' in item.statuses
+            else
+            'UNKNOWN'
+            if (
+              item.statuses
+              | select('in', failure_states)
+              | list
+              | length > 0
+            )
+            else 'COMPLIANT'
+          }}
+      loop: "{{ test_cases }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: summary_test_results
+
+    - name: Verify each calculated result
+      ansible.builtin.assert:
+        that:
+          - item.ansible_facts.calculated_audit == item.item.expected_audit
+          - item.ansible_facts.calculated_compliance == item.item.expected_compliance
+        success_msg: "{{ item.item.name }} passed"
+        fail_msg: "{{ item.item.name }} failed"
+      loop: "{{ summary_test_results.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"

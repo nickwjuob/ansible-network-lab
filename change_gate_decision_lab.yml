@@ -1,0 +1,73 @@
+---
+- name: Test Change Gate decision logic locally
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    change_gate_cases:
+      - device: R1
+        check_complete: true
+        health: UNHEALTHY
+        expected_decision: ALLOW_REMEDIATION
+
+      - device: R2
+        check_complete: true
+        health: HEALTHY
+        expected_decision: SKIP_NO_CHANGE
+
+      - device: R3
+        check_complete: false
+        health: UNKNOWN
+        expected_decision: BLOCK
+
+      - device: R4
+        check_complete: true
+        health: UNKNOWN
+        expected_decision: BLOCK
+
+  tasks:
+    - name: Calculate and display each Change Gate decision
+      ansible.builtin.debug:
+        msg:
+          device: "{{ item.device }}"
+          check_complete: "{{ item.check_complete }}"
+          health: "{{ item.health }}"
+          decision: >-
+            {{
+              'BLOCK'
+              if not item.check_complete or item.health == 'UNKNOWN'
+              else
+              'SKIP_NO_CHANGE'
+              if item.health == 'HEALTHY'
+              else
+              'ALLOW_REMEDIATION'
+              if item.health == 'UNHEALTHY'
+              else
+              'BLOCK'
+            }}
+      loop: "{{ change_gate_cases }}"
+      loop_control:
+        label: "{{ item.device }}"
+
+    - name: Assert that all decisions match expectations
+      ansible.builtin.assert:
+        that:
+          - >-
+            (
+              'BLOCK'
+              if not item.check_complete or item.health == 'UNKNOWN'
+              else
+              'SKIP_NO_CHANGE'
+              if item.health == 'HEALTHY'
+              else
+              'ALLOW_REMEDIATION'
+              if item.health == 'UNHEALTHY'
+              else
+              'BLOCK'
+            ) == item.expected_decision
+        success_msg: "{{ item.device }} decision matches expectation"
+        fail_msg: "{{ item.device }} decision does not match expectation"
+      loop: "{{ change_gate_cases }}"
+      loop_control:
+        label: "{{ item.device }}"

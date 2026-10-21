@@ -1,0 +1,85 @@
+
+---
+- name: Pre-check NTP configuration on Cisco IOS routers
+  hosts: cisco_routers
+  gather_facts: false
+
+  tasks:
+    - name: Read configured NTP servers
+      cisco.ios.ios_command:
+        commands:
+          - "show running-config | include ^ntp server"
+      register: ntp_precheck_result
+      ignore_errors: true
+      ignore_unreachable: true
+
+
+    - name: Normalize NTP command output
+      ansible.builtin.set_fact:
+        ntp_precheck_lines: >-
+          {{
+            ntp_precheck_result.stdout_lines
+            | default([])
+            | first
+            | default([])
+          }}
+
+    - name: Classify pre-check result
+      ansible.builtin.set_fact:
+        ntp_precheck_status: >-
+          {{
+            'UNREACHABLE'
+            if ntp_precheck_result.unreachable | default(false)
+            else
+            'CONNECTION_FAILED'
+            if (
+              ntp_precheck_result.failed | default(false)
+              and
+              (
+                'timed out' in (ntp_precheck_result.msg | default('') | lower)
+                or
+                'connection' in (ntp_precheck_result.msg | default('') | lower)
+                or
+                'authentication' in (ntp_precheck_result.msg | default('') | lower)
+              )
+            )
+            else
+            'CHECK_FAILED'
+            if ntp_precheck_result.failed | default(false)
+            else
+            'CHECK_FAILED'
+            if (
+              ntp_precheck_result.stdout_lines is not defined
+              or
+              ntp_precheck_result.stdout_lines | length == 0
+            )
+            else
+            'CONFIG_MISSING'
+            if ntp_precheck_lines | length == 0
+            else
+            'READY'
+            if ntp_precheck_lines == ['ntp server 192.0.2.123']
+            else
+            'CONFIG_MISMATCH'
+          }}
+
+    - name: Display pre-check result
+      ansible.builtin.debug:
+        msg:
+          device: "{{ inventory_hostname }}"
+          status: "{{ ntp_precheck_status }}"
+          ntp_config_lines: "{{ ntp_precheck_lines }}"
+
+    - name: Simulate configuration stage only when pre-check is READY
+      ansible.builtin.debug:
+        msg: >-
+          SIMULATION ONLY: {{ inventory_hostname }} passed pre-check.
+          A configuration task would be allowed to proceed.
+      when: ntp_precheck_status == 'READY'
+
+    - name: Report devices blocked by pre-check
+      ansible.builtin.debug:
+        msg: >-
+          BLOCKED: {{ inventory_hostname }} is not allowed to proceed.
+          Pre-check status: {{ ntp_precheck_status }}
+      when: ntp_precheck_status != 'READY'

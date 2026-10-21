@@ -1,0 +1,80 @@
+---
+- name: Simulate a complete guarded NTP change lifecycle
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    expected_ntp_line: "ntp server 192.0.2.123"
+
+    simulated_devices:
+      - name: R1
+        precheck_status: READY
+        postcheck_available: true
+        observed_lines:
+          - "ntp server 192.0.2.123"
+
+      - name: R2
+        precheck_status: CONNECTION_FAILED
+        postcheck_available: false
+        observed_lines: []
+
+      - name: R3
+        precheck_status: READY
+        postcheck_available: true
+        observed_lines: []
+
+  tasks:
+    - name: Initialize final status report
+      ansible.builtin.set_fact:
+        final_report: []
+
+    - name: Simulate configuration stage for READY devices
+      ansible.builtin.debug:
+        msg: >-
+          SIMULATION ONLY: {{ item.name }} passed pre-check.
+          A configuration change would be attempted.
+      loop: "{{ simulated_devices }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: item.precheck_status == 'READY'
+
+    - name: Determine final status for each device
+      ansible.builtin.set_fact:
+        final_report: >-
+          {{
+            final_report + [
+              {
+                'device': item.name,
+                'precheck': item.precheck_status,
+                'final_status':
+                  'BLOCKED'
+                  if item.precheck_status != 'READY'
+                  else
+                  'POSTCHECK_UNKNOWN'
+                  if not item.postcheck_available
+                  else
+                  'SUCCESS'
+                  if expected_ntp_line in item.observed_lines
+                  else
+                  'POSTCHECK_FAILED'
+              }
+            ]
+          }}
+      loop: "{{ simulated_devices }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Display final device report
+      ansible.builtin.debug:
+        var: final_report
+
+    - name: Verify the expected lifecycle outcomes
+      ansible.builtin.assert:
+        that:
+          - final_report | selectattr('device', 'equalto', 'R1') | map(attribute='final_status') | list == ['SUCCESS']
+          - final_report | selectattr('device', 'equalto', 'R2') | map(attribute='final_status') | list == ['BLOCKED']
+          - final_report | selectattr('device', 'equalto', 'R3') | map(attribute='final_status') | list == ['POSTCHECK_FAILED']
+        success_msg: >-
+          PASS: R1 succeeded, R2 was blocked, and R3 failed
+          post-check verification as expected.

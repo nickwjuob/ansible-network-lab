@@ -1,0 +1,56 @@
+---
+- name: Test NTP audit classification logic
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    desired_ntp_server: "192.0.2.123"
+
+    test_cases:
+      - name: "Target NTP server found"
+        result:
+          failed: false
+          stdout_lines:
+            - ["ntp server 192.0.2.123"]
+        expected_status: "MATCH"
+
+      - name: "Command succeeds but no NTP server is configured"
+        result:
+          failed: false
+          stdout_lines:
+            - []
+        expected_status: "DRIFT"
+
+      - name: "Connection timeout"
+        result:
+          failed: true
+          msg: "timed out"
+        expected_status: "CONNECTION_TIMEOUT"
+
+      - name: "Other task failure"
+        result:
+          failed: true
+          msg: "Invalid command"
+        expected_status: "CHECK_FAILED"
+
+      - name: "Missing output field"
+        result:
+          failed: false
+          msg: "Expected output is missing"
+        expected_status: "CHECK_FAILED"
+
+      - name: "Explicitly unreachable"
+        result:
+          failed: true
+          unreachable: true
+          msg: "Host unreachable"
+        expected_status: "UNREACHABLE"
+
+  tasks:
+    - name: Run each simulated test case
+      ansible.builtin.include_tasks: classify_ntp_test_case.yml
+      loop: "{{ test_cases }}"
+      loop_control:
+        loop_var: ntp_test_case
+        label: "{{ ntp_test_case.name }}"

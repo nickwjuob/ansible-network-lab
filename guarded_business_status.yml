@@ -1,0 +1,59 @@
+---
+- name: Report business status after a simulated change failure
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    device_name: R1
+
+  tasks:
+    - name: Initialize business status
+      ansible.builtin.set_fact:
+        change_status: CHANGE_ATTEMPTED
+        final_config_status: UNKNOWN
+        recovery_status: NOT_ATTEMPTED
+
+    - name: Simulate a guarded configuration workflow
+      block:
+        - name: Simulate configuration attempt
+          ansible.builtin.debug:
+            msg: >-
+              SIMULATION ONLY: attempting configuration on {{ device_name }}.
+
+        - name: Simulate configuration task failure
+          ansible.builtin.fail:
+            msg: "SIMULATED ERROR: configuration task failed."
+
+      rescue:
+        - name: Record the business failure
+          ansible.builtin.set_fact:
+            change_status: CHANGE_FAILED
+            final_config_status: UNKNOWN
+            recovery_status: NOT_ATTEMPTED
+
+        - name: Record the failure reason
+          ansible.builtin.debug:
+            msg: >-
+              CHANGE FAILED on {{ device_name }}.
+              Recovery was not attempted.
+              Final configuration has not been verified.
+
+      always:
+        - name: Report business status
+          ansible.builtin.debug:
+            msg:
+              device: "{{ device_name }}"
+              change_status: "{{ change_status }}"
+              final_config_status: "{{ final_config_status }}"
+              recovery_status: "{{ recovery_status }}"
+
+    - name: Verify the business report
+      ansible.builtin.assert:
+        that:
+          - change_status == 'CHANGE_FAILED'
+          - final_config_status == 'UNKNOWN'
+          - recovery_status == 'NOT_ATTEMPTED'
+        success_msg: >-
+          PASS: The report records the failed change,
+          unknown final configuration, and no recovery attempt.

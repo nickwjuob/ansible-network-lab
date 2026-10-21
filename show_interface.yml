@@ -1,0 +1,318 @@
+---
+- name: Initialize audit evidence batch
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  any_errors_fatal: true
+  tags:
+    - batch_init
+
+  tasks:
+    - name: Validate audit run ID
+      ansible.builtin.assert:
+        that:
+          - audit_run_id is defined
+          - audit_run_id is match('^[A-Za-z0-9_-]+$')
+        fail_msg: >-
+          Provide a valid audit_run_id using
+          -e audit_run_id=YOUR_UNIQUE_BATCH_ID
+
+    - name: Define evidence batch directory
+      ansible.builtin.set_fact:
+        evidence_batch_dir: "{{ playbook_dir }}/evidence/{{ audit_run_id }}"
+
+    - name: Check whether batch directory already exists
+      ansible.builtin.stat:
+        path: "{{ evidence_batch_dir }}"
+      register: evidence_batch_stat
+
+    - name: Refuse to overwrite an existing batch
+      ansible.builtin.assert:
+        that:
+          - not evidence_batch_stat.stat.exists
+        fail_msg: >-
+          Evidence batch already exists.
+          Choose a new audit_run_id to protect existing evidence.
+
+    - name: Create evidence batch directory
+      ansible.builtin.file:
+        path: "{{ evidence_batch_dir }}"
+        state: directory
+        mode: '0750'
+
+- name: Collect interface status from Cisco routers
+  hosts: cisco_routers
+  gather_facts: false
+
+  tasks:
+    - name: Run show ip interface brief
+      cisco.ios.ios_command:
+        commands:
+          - show ip interface brief
+      register: interface_result
+      ignore_errors: true
+      ignore_unreachable: true
+
+    - name: Classify interface collection result
+      ansible.builtin.set_fact:
+        interface_collection_status: >-
+          {{
+            'UNREACHABLE'
+            if (interface_result.unreachable | default(false) | bool)
+            else 'CONNECTION_TIMEOUT'
+            if (
+              (interface_result.msg | default('') | lower)
+              is search('timed out|timeout')
+            )
+            else 'COLLECTION_ERROR'
+            if (interface_result.failed | default(false) | bool)
+            else 'COLLECTED'
+          }}
+
+    - name: Save raw interface collection evidence
+      ansible.builtin.copy:
+        content: >-
+          {{
+            {
+              'batch_id': audit_run_id,
+              'device': inventory_hostname,
+              'management_ip': ansible_host | default('unknown'),
+              'command': 'show ip interface brief',
+              'collected_at': now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ'),
+              'collection_status': interface_collection_status,
+              'raw_output': interface_result.stdout | default([]),
+              'error': interface_result.msg | default(none)
+            } | to_nice_json
+          }}
+        dest: "{{ playbook_dir }}/evidence/{{ audit_run_id }}/{{ inventory_hostname }}_interface.json"
+        mode: '0640'
+      delegate_to: localhost
+      connection: local
+
+    - name: Display interface output
+      ansible.builtin.debug:
+        var: interface_result.stdout_lines
+      when: interface_collection_status == 'COLLECTED'
+
+    - name: Find GigabitEthernet0/0
+      ansible.builtin.set_fact:
+        gi00_matches: >-
+          {{
+            interface_result.stdout_lines[0]
+            | select('search', 'GigabitEthernet0/0')
+            | list
+          }}
+      when: interface_collection_status == 'COLLECTED'
+
+    - name: Initialize interface matches when collection fails
+      ansible.builtin.set_fact:
+        gi00_matches: []
+      when: interface_collection_status != 'COLLECTED'
+
+    - name: Extract Gi0/0 fields
+      ansible.builtin.set_fact:
+        gi00_line: " {{ gi00_matches[0] }} "
+        gi00_fields: "{{ gi00_matches[0]
+            | regex_replace('administratively down', 'administratively_down')
+            | split() }}"
+      when:
+        - gi00_matches | length > 0
+        - interface_collection_status == 'COLLECTED'
+
+    - name: Record interface field validation result
+      ansible.builtin.set_fact:
+        gi00_fields_valid: "{{ gi00_fields | length == 6 }}"
+      when:
+        - gi00_matches | length > 0
+        - interface_collection_status == 'COLLECTED'
+
+    - name: Build interface audit result
+      ansible.builtin.set_fact:
+        audit_result:
+          device: "{{ inventory_hostname }}"
+          interface: "GigabitEthernet0/0"
+          ip_address: "{{ gi00_fields[1] if (gi00_fields_valid | default(false) | bool) else 'unknown' }}"
+          collection_status: >-
+            {{
+              interface_collection_status
+              if interface_collection_status != 'COLLECTED'
+              else 'INTERFACE_MISSING'
+              if gi00_matches | length == 0
+              else 'PARSE_ERROR'
+              if not (gi00_fields_valid | default(false) | bool)
+              else 'COLLECTED'
+            }}
+          audit_status: >-
+            {{
+              'UNKNOWN'
+              if interface_collection_status != 'COLLECTED'
+              else 'UNKNOWN'
+              if gi00_matches | length == 0
+              else 'UNKNOWN'
+              if not (gi00_fields_valid | default(false) | bool)
+              else 'PASS'
+              if gi00_fields[4] == 'up' and gi00_fields[5] == 'up'
+              else 'FAIL'
+            }}
+          line_status: "{{ gi00_fields[4] | replace('administratively_down', 'administratively down') if (gi00_fields_valid | default(false) | bool) else 'unknown' }}"
+          protocol_status: "{{ gi00_fields[5] if (gi00_fields_valid | default(false) | bool) else 'unknown' }}"
+          status: >-
+            {{
+              interface_collection_status
+              if interface_collection_status != 'COLLECTED'
+              else 'INTERFACE_MISSING'
+              if (gi00_matches | default([]) | length == 0)
+              else 'PARSE_ERROR'
+              if not (gi00_fields_valid | default(false) | bool)
+              else 'PASS'
+              if (gi00_fields[4] == 'up' and gi00_fields[5] == 'up')
+              else 'FAIL'
+            }}
+
+    - name: Display structured audit result
+      ansible.builtin.debug:
+        var: audit_result
+
+    - name: Report interface field validation result
+      ansible.builtin.debug:
+        msg: >-
+          {{
+            'PASS: Expected interface fields are present'
+            if gi00_fields_valid | bool
+            else 'PARSE ERROR: Unexpected interface output format'
+          }}
+      when:
+        - inventory_hostname == "R1"
+        - gi00_matches | length > 0
+
+    - name: Report missing GigabitEthernet0/0
+      ansible.builtin.debug:
+        msg: "ALERT: GigabitEthernet0/0 was not found in command output"
+      when:
+        - interface_collection_status == 'COLLECTED'
+        - gi00_matches | length == 0
+
+    - name: Debug selected interface line
+      ansible.builtin.debug:
+        var: gi00_line
+      when:
+        - gi00_matches | length > 0
+
+    - name: Debug extracted fields list
+      ansible.builtin.debug:
+        var: gi00_fields
+      when:
+        - inventory_hostname == "R1"
+        - gi00_matches | length > 0
+
+    - name: Display extracted interface fields
+      ansible.builtin.debug:
+        msg:
+          - "Interface: {{ gi00_fields[0] }}"
+          - "IP address: {{ gi00_fields[1] }}"
+          - "Status: {{ gi00_fields[4] }}"
+          - "Protocol: {{ gi00_fields[5] }}"
+      when:
+        - inventory_hostname == "R1"
+        - gi00_matches | length > 0
+        - gi00_fields_valid | default(false) | bool
+
+    - name: Check R1 GigabitEthernet0/0
+      ansible.builtin.debug:
+        msg: >-
+          {{
+            'PASS: Gi0/0 is up/up'
+            if gi00_fields[4] == 'up' and gi00_fields[5] == 'up'
+            else 'ALERT: Gi0/0 is not up/up'
+          }}
+      when:
+        - inventory_hostname == "R1"
+        - gi00_matches | length > 0
+        - gi00_fields_valid | default(false) | bool
+
+    - name: Collect software version independently
+      cisco.ios.ios_command:
+        commands:
+          - show version
+      register: version_result
+      ignore_errors: true
+      ignore_unreachable: true
+      when: interface_collection_status == 'COLLECTED'
+
+    - name: Classify software version collection result
+      ansible.builtin.set_fact:
+        software_version_status: >-
+          {{
+            'UNREACHABLE'
+            if (version_result.unreachable | default(false) | bool)
+            else 'COLLECTION_ERROR'
+            if (version_result.failed | default(false) | bool)
+            else 'SKIPPED_DUE_TO_INTERFACE_COLLECTION_FAILURE'
+            if (version_result.skipped | default(false) | bool)
+            else 'COLLECTED'
+          }}
+
+    - name: Add software version status to audit result
+      ansible.builtin.set_fact:
+        audit_result: >-
+          {{
+            audit_result
+            | combine({
+                'software_version_status': software_version_status
+              })
+          }}
+
+    - name: Save final device audit result
+      ansible.builtin.copy:
+        content: "{{ audit_result | to_nice_json }}"
+        dest: "{{ playbook_dir }}/evidence/{{ audit_run_id }}/{{ inventory_hostname }}_audit.json"
+        mode: '0640'
+      delegate_to: localhost
+      connection: local
+
+    - name: Report software version collection
+      ansible.builtin.debug:
+        msg: >-
+          {{
+            'Software version collected successfully'
+            if version_result.stdout is defined
+            else 'ALERT: Software version collection failed'
+          }}
+
+    - name: Display final device audit report
+      ansible.builtin.debug:
+        var: audit_result
+
+- name: Generate consolidated audit report
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  tags:
+    - report
+
+  tasks:
+    - name: Initialize consolidated audit report
+      ansible.builtin.set_fact:
+        consolidated_audit_report: []
+
+    - name: Check for each device audit result file
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/evidence/{{ audit_run_id }}/{{ item }}_audit.json"
+      register: audit_file_checks
+      loop: "{{ groups['cisco_routers'] }}"
+
+    - name: Process each device audit result
+      ansible.builtin.include_tasks: aggregate_one_device.yml
+      loop: "{{ audit_file_checks.results }}"
+      loop_control:
+        loop_var: audit_file
+
+    - name: Display consolidated audit report
+      ansible.builtin.debug:
+        var: consolidated_audit_report
+
+    - name: Write consolidated audit report to JSON
+      ansible.builtin.copy:
+        content: "{{ consolidated_audit_report | to_nice_json }}"
+        dest: "{{ playbook_dir }}/evidence/{{ audit_run_id }}/audit_report.json"
+        mode: '0644'

@@ -1,0 +1,11 @@
+---
+- name: Configure NTP server on Cisco IOS routers
+  hosts: cisco_routers
+  gather_facts: false
+
+  tasks:
+    - name: Ensure the desired NTP server is configured
+      cisco.ios.ios_config:
+        lines:
+          - ntp server 192.0.2.123
+        backup: false

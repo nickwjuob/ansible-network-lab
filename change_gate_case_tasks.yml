@@ -1,0 +1,43 @@
+---
+- name: Calculate Change Gate decision
+  ansible.builtin.set_fact:
+    gate_decision: >-
+      {{
+        'BLOCK'
+        if not gate_case.check_complete
+        or gate_case.health == 'UNKNOWN'
+        else
+        'SKIP_NO_CHANGE'
+        if gate_case.health == 'HEALTHY'
+        else
+        'ALLOW_REMEDIATION'
+        if gate_case.health == 'UNHEALTHY'
+        else
+        'BLOCK'
+      }}
+
+- name: Display Change Gate decision
+  ansible.builtin.debug:
+    msg: "{{ gate_case.device }} decision = {{ gate_decision }}"
+
+- name: Simulate remediation
+  ansible.builtin.debug:
+    msg: "{{ gate_case.device }}: simulated remediation executed"
+  when: gate_decision == 'ALLOW_REMEDIATION'
+
+- name: Record no-change decision
+  ansible.builtin.debug:
+    msg: "{{ gate_case.device }}: already healthy; remediation skipped"
+  when: gate_decision == 'SKIP_NO_CHANGE'
+
+- name: Record blocked decision
+  ansible.builtin.debug:
+    msg: "{{ gate_case.device }}: remediation blocked; check results are insufficient or state is unknown"
+  when: gate_decision == 'BLOCK'
+
+- name: Verify decision matches expectation
+  ansible.builtin.assert:
+    that:
+      - gate_decision == gate_case.expected_decision
+    success_msg: "{{ gate_case.device }} decision verified"
+    fail_msg: "{{ gate_case.device }} decision does not match expectation"

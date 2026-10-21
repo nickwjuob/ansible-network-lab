@@ -1,0 +1,259 @@
+---
+- name: Recover audit report from saved evidence
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags:
+    - recovery_report
+
+  vars:
+    source_audit_run_id: "20261018-008"
+
+    source_report: >-
+      {{ playbook_dir }}/evidence/{{ source_audit_run_id }}/audit_report.json
+
+    recovery_dir: >-
+      {{ playbook_dir }}/evidence/{{ source_audit_run_id }}/recovery
+
+    recovery_report: "{{ recovery_dir }}/recovery_report.json"
+
+    recovery_metadata: "{{ recovery_dir }}/recovery_metadata.json"
+
+  tasks:
+    - name: Read original audit report
+      ansible.builtin.slurp:
+        src: "{{ source_report }}"
+      register: source_report_content
+
+    - name: Parse original audit report
+      ansible.builtin.set_fact:
+        original_devices: >-
+          {{
+            source_report_content.content
+            | b64decode
+            | from_json
+          }}
+
+    - name: Validate original report structure
+      ansible.builtin.assert:
+        that:
+          - original_devices is sequence
+          - original_devices is not string
+          - original_devices is not mapping
+          - original_devices | length > 0
+          - >-
+            original_devices
+            | selectattr('device', 'defined')
+            | list
+            | length
+            == original_devices | length
+        fail_msg: >-
+          The original audit report is not a valid non-empty
+          list of device records.
+        success_msg: >-
+          Original report parsed successfully and contains device records.
+
+    - name: Build recovery report
+      ansible.builtin.set_fact:
+        regenerated_report:
+          source_audit_run_id: "{{ source_audit_run_id }}"
+          recovery_type: "REPORT_REGENERATION_FROM_SAVED_EVIDENCE"
+          recovery_generated_at: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+          source_report: "{{ source_report }}"
+          devices: "{{ original_devices }}"
+
+    - name: Build recovery metadata
+      ansible.builtin.set_fact:
+        recovery_metadata_record:
+          source_audit_run_id: "{{ source_audit_run_id }}"
+          source_report: "{{ source_report }}"
+          recovery_type: "REPORT_REGENERATION_FROM_SAVED_EVIDENCE"
+          recovery_generated_at: "{{ regenerated_report.recovery_generated_at }}"
+          recovery_report: "{{ recovery_report }}"
+          recovery_status: "SUCCESS"
+          validation_scope:
+            - "Source JSON parsed successfully"
+            - "Source report structure validated"
+            - "Regenerated report written and validated"
+          integrity_verified: false
+
+    - name: Display recovery metadata preview
+      ansible.builtin.debug:
+        var: recovery_metadata_record
+
+    - name: Display recovery report preview
+      ansible.builtin.debug:
+        var: regenerated_report
+
+    - name: Check recovery output directory
+      ansible.builtin.stat:
+        path: "{{ recovery_dir }}"
+      register: recovery_dir_check
+
+    - name: Validate recovery output directory
+      ansible.builtin.assert:
+        that:
+          - recovery_dir_check.stat.exists
+          - recovery_dir_check.stat.isdir
+        fail_msg: >-
+          Recovery output directory is missing or is not a directory.
+        success_msg: "Recovery output directory exists."
+
+    - name: Check whether recovery report already exists
+      ansible.builtin.stat:
+        path: "{{ recovery_report }}"
+      register: recovery_report_check
+
+    - name: Refuse to overwrite an existing recovery report
+      ansible.builtin.assert:
+        that:
+          - not recovery_report_check.stat.exists
+        fail_msg: >-
+          Recovery report already exists. Refusing to overwrite it.
+          Preserve the existing artifact and choose a new recovery destination.
+        success_msg: "Recovery report destination is available."
+
+    - name: Write regenerated recovery report
+      ansible.builtin.copy:
+        content: "{{ regenerated_report | to_nice_json }}\n"
+        dest: "{{ recovery_report }}"
+        mode: "0640"
+        force: false
+
+    - name: Verify regenerated recovery report
+      ansible.builtin.slurp:
+        src: "{{ recovery_report }}"
+      register: written_recovery_report
+
+    - name: Parse regenerated recovery report
+      ansible.builtin.set_fact:
+        verified_recovery_report: >-
+          {{
+            written_recovery_report.content
+            | b64decode
+            | from_json
+          }}
+
+    - name: Validate regenerated recovery report
+      ansible.builtin.assert:
+        that:
+          - verified_recovery_report.source_audit_run_id == source_audit_run_id
+          - verified_recovery_report.recovery_type == 'REPORT_REGENERATION_FROM_SAVED_EVIDENCE'
+          - verified_recovery_report.devices | length == original_devices | length
+          - >-
+            (
+              verified_recovery_report.devices
+              | selectattr('device', 'equalto', 'R2')
+              | first
+            ).collection_status == 'AUDIT_FILE_READ_ERROR'
+        fail_msg: "The written recovery report failed validation."
+        success_msg: "Recovery report written and validated successfully."
+
+- name: Generate recovery metadata from existing report
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags:
+    - recovery_metadata
+
+  vars:
+    source_audit_run_id: "20261018-008"
+    recovery_dir: "{{ playbook_dir }}/evidence/{{ source_audit_run_id }}/recovery"
+    recovery_report: "{{ recovery_dir }}/recovery_report.json"
+    recovery_metadata: "{{ recovery_dir }}/recovery_metadata.json"
+
+  tasks:
+    - name: Check existing recovery report
+      ansible.builtin.stat:
+        path: "{{ recovery_report }}"
+      register: recovery_report_check
+
+    - name: Require existing recovery report
+      ansible.builtin.assert:
+        that:
+          - recovery_report_check.stat.exists
+          - recovery_report_check.stat.isreg
+        fail_msg: "Recovery report is missing or is not a regular file."
+        success_msg: "Existing recovery report found."
+
+    - name: Read existing recovery report
+      ansible.builtin.slurp:
+        src: "{{ recovery_report }}"
+      register: recovery_report_content
+
+    - name: Parse existing recovery report
+      ansible.builtin.set_fact:
+        verified_recovery_report: >-
+          {{
+            recovery_report_content.content
+            | b64decode
+            | from_json
+          }}
+
+    - name: Validate existing recovery report
+      ansible.builtin.assert:
+        that:
+          - verified_recovery_report.source_audit_run_id == source_audit_run_id
+          - verified_recovery_report.recovery_type == 'REPORT_REGENERATION_FROM_SAVED_EVIDENCE'
+          - verified_recovery_report.devices | length > 0
+        fail_msg: "Existing recovery report failed validation."
+        success_msg: "Existing recovery report parsed and validated."
+
+    - name: Build recovery metadata
+      ansible.builtin.set_fact:
+        recovery_metadata_record:
+          source_audit_run_id: "{{ source_audit_run_id }}"
+          source_report: "{{ playbook_dir }}/evidence/{{ source_audit_run_id }}/audit_report.json"
+          recovery_type: "{{ verified_recovery_report.recovery_type }}"
+          recovery_generated_at: "{{ verified_recovery_report.recovery_generated_at }}"
+          recovery_report: "{{ recovery_report }}"
+          metadata_generated_at: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+          recovery_status: "SUCCESS"
+          validation_scope:
+            - "Existing recovery report parsed successfully"
+            - "Recovery report structure validated"
+          integrity_verified: false
+
+    - name: Check whether recovery metadata already exists
+      ansible.builtin.stat:
+        path: "{{ recovery_metadata }}"
+      register: recovery_metadata_check
+
+    - name: Refuse to overwrite existing recovery metadata
+      ansible.builtin.assert:
+        that:
+          - not recovery_metadata_check.stat.exists
+        fail_msg: >-
+          Recovery metadata already exists. Refusing to overwrite it.
+        success_msg: "Recovery metadata destination is available."
+
+    - name: Write recovery metadata
+      ansible.builtin.copy:
+        content: "{{ recovery_metadata_record | to_nice_json }}\n"
+        dest: "{{ recovery_metadata }}"
+        mode: "0640"
+        force: false
+
+    - name: Read back recovery metadata
+      ansible.builtin.slurp:
+        src: "{{ recovery_metadata }}"
+      register: written_recovery_metadata
+
+    - name: Parse written recovery metadata
+      ansible.builtin.set_fact:
+        verified_recovery_metadata: >-
+          {{
+            written_recovery_metadata.content
+            | b64decode
+            | from_json
+          }}
+
+    - name: Validate written recovery metadata
+      ansible.builtin.assert:
+        that:
+          - verified_recovery_metadata.source_audit_run_id == source_audit_run_id
+          - verified_recovery_metadata.recovery_status == 'SUCCESS'
+          - verified_recovery_metadata.integrity_verified == false
+          - verified_recovery_metadata.recovery_report == recovery_report
+        fail_msg: "Written recovery metadata failed validation."
+        success_msg: "Recovery metadata written and validated successfully."

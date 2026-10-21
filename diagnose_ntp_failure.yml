@@ -1,0 +1,17 @@
+---
+- name: Diagnose Ansible network connection failure
+  hosts: cisco_routers
+  gather_facts: false
+
+  tasks:
+    - name: Attempt read-only NTP command
+      cisco.ios.ios_command:
+        commands:
+          - "show running-config | include ^ntp server"
+      register: diagnostic_result
+      ignore_errors: true
+      ignore_unreachable: true
+
+    - name: Display complete registered result
+      ansible.builtin.debug:
+        var: diagnostic_result

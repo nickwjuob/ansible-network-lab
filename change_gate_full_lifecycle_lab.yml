@@ -1,0 +1,47 @@
+---
+- name: Test full Change Gate lifecycle locally
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    lifecycle_cases:
+      - device: R1
+        check_complete: true
+        initial_health: UNHEALTHY
+        change_succeeds: true
+        postcheck_healthy: true
+        recovery_succeeds: false
+        expected_status: SUCCESS
+
+      - device: R2
+        check_complete: true
+        initial_health: UNHEALTHY
+        change_succeeds: false
+        postcheck_healthy: false
+        recovery_succeeds: true
+        expected_status: RECOVERED
+
+      - device: R3
+        check_complete: true
+        initial_health: UNHEALTHY
+        change_succeeds: true
+        postcheck_healthy: false
+        recovery_succeeds: true
+        expected_status: RECOVERED
+
+      - device: R4
+        check_complete: false
+        initial_health: UNKNOWN
+        change_succeeds: true
+        postcheck_healthy: true
+        recovery_succeeds: false
+        expected_status: BLOCKED
+
+  tasks:
+    - name: Process each simulated device
+      ansible.builtin.include_tasks: change_gate_lifecycle_case.yml
+      loop: "{{ lifecycle_cases }}"
+      loop_control:
+        loop_var: lifecycle_case
+        label: "{{ lifecycle_case.device }}"

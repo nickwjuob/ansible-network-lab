@@ -1,0 +1,21 @@
+---
+- name: Collect read-only topology evidence
+  hosts: cisco_routers
+  gather_facts: false
+
+  tasks:
+    - name: Read interface status, relevant config, and ARP
+      cisco.ios.ios_command:
+        commands:
+          - "show ip interface brief"
+          - "show running-config | include ^ip route|^ntp server"
+          - "show ip arp"
+      register: topology_evidence
+
+    - name: Display topology evidence
+      ansible.builtin.debug:
+        msg:
+          device: "{{ inventory_hostname }}"
+          interfaces: "{{ topology_evidence.stdout[0] }}"
+          route_and_ntp_config: "{{ topology_evidence.stdout[1] }}"
+          arp_table: "{{ topology_evidence.stdout[2] }}"

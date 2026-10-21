@@ -1,0 +1,193 @@
+---
+- name: Simulate device lifecycles and collect results
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    lifecycle_cases:
+      - device: R1
+        check_complete: true
+        initial_health: UNHEALTHY
+        change_succeeds: true
+        postcheck_healthy: true
+        recovery_succeeds: false
+
+      - device: R2
+        check_complete: true
+        initial_health: UNHEALTHY
+        change_succeeds: false
+        postcheck_healthy: false
+        recovery_succeeds: true
+
+      - device: R3
+        check_complete: true
+        initial_health: UNHEALTHY
+        change_succeeds: true
+        postcheck_healthy: false
+        recovery_succeeds: false
+
+      - device: R4
+        check_complete: false
+        initial_health: UNKNOWN
+        change_succeeds: true
+        postcheck_healthy: true
+        recovery_succeeds: false
+
+      - device: R5
+        check_complete: true
+        initial_health: HEALTHY
+        change_succeeds: true
+        postcheck_healthy: true
+        recovery_succeeds: false
+
+      - device: R6
+        check_complete: false
+        initial_health: UNKNOWN
+        change_succeeds: false
+        postcheck_healthy: false
+        recovery_succeeds: false
+
+  tasks:
+    - name: Initialize fleet result collection
+      ansible.builtin.set_fact:
+        fleet_results: []
+
+    - name: Run one lifecycle simulation per case
+      ansible.builtin.include_tasks: change_gate_auto_case.yml
+      loop: "{{ lifecycle_cases }}"
+      loop_control:
+        loop_var: lifecycle_case
+        label: "{{ lifecycle_case.device }}"
+
+    - name: Count collected lifecycle results
+      ansible.builtin.set_fact:
+        fleet_total: "{{ fleet_results | length }}"
+        success_count: >-
+          {{
+            fleet_results
+            | selectattr('status', 'equalto', 'SUCCESS')
+            | list | length
+          }}
+        recovered_count: >-
+          {{
+            fleet_results
+            | selectattr('status', 'equalto', 'RECOVERED')
+            | list | length
+          }}
+        recovery_failed_count: >-
+          {{
+            fleet_results
+            | selectattr('status', 'equalto', 'RECOVERY_FAILED')
+            | list | length
+          }}
+        blocked_count: >-
+          {{
+            fleet_results
+            | selectattr('status', 'equalto', 'BLOCKED')
+            | list | length
+          }}
+        skipped_count: >-
+          {{
+            fleet_results
+            | selectattr('status', 'equalto', 'SKIP_NO_CHANGE')
+            | list | length
+          }}
+        unknown_health_count: >-
+          {{
+            fleet_results
+            | selectattr('initial_health', 'equalto', 'UNKNOWN')
+            | list | length
+          }}
+
+    - name: Calculate audit completeness
+      ansible.builtin.set_fact:
+        audit_complete: "{{ unknown_health_count | int == 0 }}"
+
+    - name: Calculate fleet outcome
+      ansible.builtin.set_fact:
+        fleet_outcome: >-
+          {{
+            'ACTION_REQUIRED'
+            if (
+              recovery_failed_count | int > 0
+              or blocked_count | int > 0
+              or unknown_health_count | int > 0
+            )
+            else
+            'COMPLETED_WITH_RECOVERY'
+            if recovered_count | int > 0
+            else
+            'COMPLETE_SUCCESS'
+          }}
+
+    - name: Display collected device results
+      ansible.builtin.debug:
+        var: fleet_results
+
+    - name: Display fleet summary
+      ansible.builtin.debug:
+        msg:
+          devices_total: "{{ fleet_total }}"
+          success: "{{ success_count }}"
+          recovered: "{{ recovered_count }}"
+          recovery_failed: "{{ recovery_failed_count }}"
+          blocked: "{{ blocked_count }}"
+          skipped_no_change: "{{ skipped_count }}"
+          unknown_initial_health: "{{ unknown_health_count }}"
+          audit_complete: "{{ unknown_health_count | int == 0 }}"
+          fleet_outcome: "{{ fleet_outcome }}"
+
+    - name: Validate fleet result collection
+      ansible.builtin.assert:
+        that:
+          - fleet_total | int == 6
+          - fleet_results | length == 6
+          - >-
+            (
+              fleet_results
+              | map(attribute='device')
+              | unique
+              | list
+              | length
+            ) == 6
+        fail_msg: "Fleet collection failed: missing or duplicate device results."
+        success_msg: "PASS: all six device results were collected exactly once."
+
+    - name: Validate fleet status counters
+      ansible.builtin.assert:
+        that:
+          - success_count | int == 1
+          - recovered_count | int == 1
+          - recovery_failed_count | int == 1
+          - blocked_count | int == 2
+          - skipped_count | int == 1
+          - >-
+            (
+              success_count | int
+              + recovered_count | int
+              + recovery_failed_count | int
+              + blocked_count | int
+              + skipped_count | int
+            ) == fleet_total | int
+        fail_msg: "Fleet counter validation failed."
+        success_msg: "PASS: fleet status counters match the expected results."
+
+    - name: Validate fleet safety conclusion
+      ansible.builtin.assert:
+        that:
+          - unknown_health_count | int == 2
+          - not (audit_complete | bool)
+          - recovery_failed_count | int > 0
+          - fleet_outcome == 'ACTION_REQUIRED'
+          - >-
+            not (
+              (
+                recovery_failed_count | int > 0
+                or blocked_count | int > 0
+                or unknown_health_count | int > 0
+              )
+              and fleet_outcome == 'COMPLETE_SUCCESS'
+            )
+        fail_msg: "Fleet safety validation failed: the summary may misrepresent the fleet condition."
+        success_msg: "PASS: fleet outcome correctly reports ACTION_REQUIRED."

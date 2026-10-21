@@ -1,0 +1,23 @@
+---
+- name: Test recovery failure handling locally
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    lifecycle_cases:
+      - device: R3
+        check_complete: true
+        initial_health: UNHEALTHY
+        change_succeeds: true
+        postcheck_healthy: false
+        recovery_succeeds: false
+        expected_status: RECOVERY_FAILED
+
+  tasks:
+    - name: Process each simulated device
+      ansible.builtin.include_tasks: change_gate_recovery_failure_case.yml
+      loop: "{{ lifecycle_cases }}"
+      loop_control:
+        loop_var: lifecycle_case
+        label: "{{ lifecycle_case.device }}"

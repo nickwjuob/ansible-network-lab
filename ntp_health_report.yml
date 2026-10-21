@@ -1,0 +1,198 @@
+---
+- name: Build a read-only NTP health report
+  hosts: cisco_routers
+  gather_facts: false
+
+  tasks:
+    - name: Read NTP configuration and operational state
+      cisco.ios.ios_command:
+        commands:
+          - "show running-config | include ^ntp server"
+          - "show ntp status"
+          - "show ntp associations"
+      register: ntp_health_result
+      ignore_errors: true
+      ignore_unreachable: true
+
+    - name: Normalize command outputs
+      ansible.builtin.set_fact:
+        ntp_config_lines: >-
+          {{
+            ntp_health_result.stdout_lines
+            | default([])
+            | first
+            | default([])
+          }}
+        ntp_status_output: >-
+          {{
+            ntp_health_result.stdout[1]
+            if (ntp_health_result.stdout | default([]) | length) > 1
+            else ''
+          }}
+        ntp_association_output: >-
+          {{
+            ntp_health_result.stdout[2]
+            if (ntp_health_result.stdout | default([]) | length) > 2
+            else ''
+          }}
+
+    - name: Classify NTP configuration
+      ansible.builtin.set_fact:
+        ntp_config_status: >-
+          {{
+            'UNREACHABLE'
+            if ntp_health_result.unreachable | default(false)
+            else
+            'CHECK_FAILED'
+            if ntp_health_result.failed | default(false)
+            else
+            'CHECK_UNKNOWN'
+            if ntp_health_result.stdout is not defined
+            else
+            'CONFIG_MISSING'
+            if ntp_config_lines | length == 0
+            else
+            'CONFIG_OK'
+            if ntp_config_lines == ['ntp server 192.0.2.123']
+            else
+            'CONFIG_MISMATCH'
+          }}
+
+    - name: Classify NTP operational state
+      ansible.builtin.set_fact:
+        ntp_operational_status: >-
+          {{
+            'UNREACHABLE'
+            if ntp_health_result.unreachable | default(false)
+            else
+            'CHECK_FAILED'
+            if ntp_health_result.failed | default(false)
+            else
+            'CHECK_UNKNOWN'
+            if ntp_status_output | length == 0
+            else
+            'UNSYNCED'
+            if 'clock is unsynchronized' in (ntp_status_output | lower)
+            else
+            'SYNCED'
+            if 'clock is synchronized' in (ntp_status_output | lower)
+            else
+            'CHECK_UNKNOWN'
+          }}
+
+    - name: Classify overall NTP health
+      ansible.builtin.set_fact:
+          ntp_overall_health: >-
+            {{
+              'UNKNOWN'
+              if (
+                ntp_config_status in [
+                  'UNREACHABLE',
+                  'CHECK_FAILED',
+                  'CHECK_UNKNOWN'
+                ]
+                or
+                ntp_operational_status in [
+                  'UNREACHABLE',
+                  'CHECK_FAILED',
+                  'CHECK_UNKNOWN'
+                ]
+              )
+              else
+              'HEALTHY'
+              if (
+                ntp_config_status == 'CONFIG_OK'
+                and
+                ntp_operational_status == 'SYNCED'
+              )
+              else
+              'UNHEALTHY'
+            }}
+
+    - name: Determine NTP health reason
+      ansible.builtin.set_fact:
+          ntp_health_reason: >-
+            {{
+              'CHECK_INCOMPLETE'
+              if ntp_overall_health == 'UNKNOWN'
+              else
+              'NONE'
+              if ntp_overall_health == 'HEALTHY'
+              else
+              'NTP_CONFIG_MISSING'
+              if ntp_config_status == 'CONFIG_MISSING'
+              else
+              'NTP_CONFIG_MISMATCH'
+              if ntp_config_status == 'CONFIG_MISMATCH'
+              else
+              'NTP_NOT_SYNCHRONIZED'
+              if ntp_operational_status == 'UNSYNCED'
+              else
+              'NTP_HEALTH_CHECK_FAILED'
+            }}
+
+    - name: Display NTP health report
+      ansible.builtin.debug:
+        msg:
+          device: "{{ inventory_hostname }}"
+          config_status: "{{ ntp_config_status }}"
+          operational_status: "{{ ntp_operational_status }}"
+          overall_health: "{{ ntp_overall_health }}"
+          health_reason: "{{ ntp_health_reason }}"
+          ntp_config_lines: "{{ ntp_config_lines }}"
+          ntp_status_output: "{{ ntp_status_output }}"
+          ntp_association_output: "{{ ntp_association_output }}"
+
+- name: Summarize NTP health across all routers
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Count device health states
+      ansible.builtin.set_fact:
+        ntp_devices_total: "{{ groups['cisco_routers'] | length }}"
+        ntp_healthy_count: >-
+          {{
+            groups['cisco_routers']
+            | map('extract', hostvars)
+            | selectattr('ntp_overall_health', 'defined')
+            | selectattr('ntp_overall_health', 'equalto', 'HEALTHY')
+            | list
+            | length
+          }}
+        ntp_unhealthy_count: >-
+          {{
+            groups['cisco_routers']
+            | map('extract', hostvars)
+            | selectattr('ntp_overall_health', 'defined')
+            | selectattr('ntp_overall_health', 'equalto', 'UNHEALTHY')
+            | list
+            | length
+          }}
+
+    - name: Calculate unknown devices and audit completeness
+      ansible.builtin.set_fact:
+        ntp_unknown_count: >-
+          {{
+            ntp_devices_total | int
+            - ntp_healthy_count | int
+            - ntp_unhealthy_count | int
+          }}
+        ntp_audit_complete: >-
+          {{
+            (
+              ntp_devices_total | int
+              - ntp_healthy_count | int
+              - ntp_unhealthy_count | int
+            ) == 0
+          }}
+
+    - name: Display fleet-wide NTP summary
+      ansible.builtin.debug:
+        msg:
+          devices_total: "{{ ntp_devices_total }}"
+          healthy: "{{ ntp_healthy_count }}"
+          unhealthy: "{{ ntp_unhealthy_count }}"
+          unknown: "{{ ntp_unknown_count }}"
+          audit_complete: "{{ ntp_audit_complete }}"

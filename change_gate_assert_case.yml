@@ -1,0 +1,38 @@
+---
+- name: Display current decision
+  ansible.builtin.debug:
+    msg: "{{ gate_case.device }} decision = {{ gate_case.decision }}"
+
+- name: Validate that the decision is recognized
+  ansible.builtin.assert:
+    that:
+      - gate_case.decision in
+        ['ALLOW_REMEDIATION', 'SKIP_NO_CHANGE', 'BLOCK']
+    fail_msg: "{{ gate_case.device }} has an invalid Change Gate decision"
+    success_msg: "{{ gate_case.device }} decision is recognized"
+
+- name: Simulate remediation
+  ansible.builtin.debug:
+    msg: "{{ gate_case.device }} simulated remediation executed"
+  when: gate_case.decision == 'ALLOW_REMEDIATION'
+
+- name: Record no-change decision
+  ansible.builtin.debug:
+    msg: "{{ gate_case.device }} is healthy; no change required"
+  when: gate_case.decision == 'SKIP_NO_CHANGE'
+
+- name: Record blocked decision
+  ansible.builtin.debug:
+    msg: "{{ gate_case.device }} remediation blocked; check or state is insufficient"
+  when: gate_case.decision == 'BLOCK'
+
+- name: Verify expected result
+  ansible.builtin.assert:
+    that:
+      - >-
+        (
+          'ALLOW'
+          if gate_case.decision == 'ALLOW_REMEDIATION'
+          else 'DENY'
+        ) == gate_case.expected_result
+    success_msg: "{{ gate_case.device }} expected result verified"

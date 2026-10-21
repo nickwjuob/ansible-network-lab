@@ -1,0 +1,17 @@
+---
+- name: Read-only NTP configuration inspection
+  hosts: cisco_routers
+  gather_facts: false
+
+  tasks:
+    - name: Read configured NTP servers
+      cisco.ios.ios_command:
+        commands:
+          - "show running-config | include ^ntp server"
+      register: ntp_config
+
+    - name: Display NTP configuration by device
+      ansible.builtin.debug:
+        msg:
+          device: "{{ inventory_hostname }}"
+          ntp_config_lines: "{{ ntp_config.stdout_lines[0] }}"

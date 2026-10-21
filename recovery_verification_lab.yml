@@ -1,0 +1,76 @@
+---
+- name: Distinguish recovery execution from recovery verification
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    device_name: R1
+
+  tasks:
+    - name: Initialize business status
+      ansible.builtin.set_fact:
+        change_status: CHANGE_ATTEMPTED
+        recovery_status: NOT_ATTEMPTED
+        recovery_verification_status: NOT_RUN
+        final_config_status: UNKNOWN
+
+    - name: Simulate guarded configuration and recovery
+      block:
+        - name: Simulate configuration failure
+          ansible.builtin.fail:
+            msg: "SIMULATED ERROR: configuration task failed."
+
+      rescue:
+        - name: Record the original change failure
+          ansible.builtin.set_fact:
+            change_status: CHANGE_FAILED
+
+        - name: Mark recovery as attempted
+          ansible.builtin.set_fact:
+            recovery_status: RECOVERY_ATTEMPTED
+
+        - name: Simulate recovery action
+          ansible.builtin.debug:
+            msg: >-
+              SIMULATION ONLY: recovery task ran without
+              reporting an error. Device recovery is not yet verified.
+
+        - name: Simulate recovery post-check
+          block:
+            - name: Simulate an unavailable post-check
+              ansible.builtin.fail:
+                msg: "SIMULATED ERROR: unable to run recovery post-check."
+
+          rescue:
+            - name: Record unknown recovery verification
+              ansible.builtin.set_fact:
+                recovery_verification_status: UNKNOWN
+                final_config_status: UNKNOWN
+
+            - name: Explain the verification outcome
+              ansible.builtin.debug:
+                msg: >-
+                  Recovery was attempted, but its result
+                  could not be verified.
+
+      always:
+        - name: Report final business status
+          ansible.builtin.debug:
+            msg:
+              device: "{{ device_name }}"
+              change_status: "{{ change_status }}"
+              recovery_status: "{{ recovery_status }}"
+              recovery_verification_status: "{{ recovery_verification_status }}"
+              final_config_status: "{{ final_config_status }}"
+
+    - name: Validate the business report
+      ansible.builtin.assert:
+        that:
+          - change_status == 'CHANGE_FAILED'
+          - recovery_status == 'RECOVERY_ATTEMPTED'
+          - recovery_verification_status == 'UNKNOWN'
+          - final_config_status == 'UNKNOWN'
+        success_msg: >-
+          PASS: Recovery was attempted, but the final device
+          state remains unknown because verification was unavailable.

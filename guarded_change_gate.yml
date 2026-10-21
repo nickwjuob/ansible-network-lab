@@ -1,0 +1,43 @@
+---
+- name: Test guarded configuration change gate locally
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    simulated_devices:
+      - name: R1
+        precheck_status: READY
+      - name: R2
+        precheck_status: CONNECTION_FAILED
+      - name: R3
+        precheck_status: CONFIG_MISMATCH
+
+  tasks:
+    - name: Simulate configuration only for READY devices
+      ansible.builtin.debug:
+        msg: >-
+          SIMULATION ONLY: {{ item.name }} passed pre-check.
+          Configuration would be permitted.
+      loop: "{{ simulated_devices }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: item.precheck_status == 'READY'
+
+    - name: Report devices blocked by the gate
+      ansible.builtin.debug:
+        msg: >-
+          BLOCKED: {{ item.name }} has pre-check status
+          {{ item.precheck_status }}.
+          Configuration is not permitted.
+      loop: "{{ simulated_devices }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: item.precheck_status != 'READY'
+
+    - name: Assert only R1 is allowed through the gate
+      ansible.builtin.assert:
+        that:
+          - simulated_devices | selectattr('precheck_status', 'equalto', 'READY') | map(attribute='name') | list == ['R1']
+          - simulated_devices | selectattr('precheck_status', 'ne', 'READY') | map(attribute='name') | list == ['R2', 'R3']
+        success_msg: "PASS: The change gate permits only READY devices."

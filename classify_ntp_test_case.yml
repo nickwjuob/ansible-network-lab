@@ -1,0 +1,49 @@
+---
+- name: Classify simulated result
+  ansible.builtin.set_fact:
+    simulated_status: >-
+      {{
+        'UNREACHABLE'
+        if ntp_test_case.result.unreachable | default(false)
+        else
+        'CONNECTION_TIMEOUT'
+        if (
+          ntp_test_case.result.failed | default(false)
+          and
+          'timed out' in (ntp_test_case.result.msg | default('') | lower)
+        )
+        else
+        'CHECK_FAILED'
+        if ntp_test_case.result.failed | default(false)
+        else
+        'CHECK_FAILED'
+        if (
+          ntp_test_case.result.stdout_lines is not defined
+          or ntp_test_case.result.stdout_lines is not sequence
+          or ntp_test_case.result.stdout_lines is string
+          or (ntp_test_case.result.stdout_lines | length == 0)
+          or ntp_test_case.result.stdout_lines[0] is not sequence
+          or ntp_test_case.result.stdout_lines[0] is string
+        )
+        else
+        'MATCH'
+        if (
+          ntp_test_case.result.stdout_lines[0]
+          | select('search', '^ntp server ' ~ desired_ntp_server ~ '$')
+          | list
+          | length
+        ) > 0
+        else
+        'DRIFT'
+      }}
+
+- name: Verify classification
+  ansible.builtin.assert:
+    that:
+      - simulated_status == ntp_test_case.expected_status
+    success_msg: >-
+      PASS: {{ ntp_test_case.name }} -> {{ simulated_status }}
+    fail_msg: >-
+      FAIL: {{ ntp_test_case.name }}.
+      Expected {{ ntp_test_case.expected_status }},
+      got {{ simulated_status }}.

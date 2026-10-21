@@ -1,0 +1,30 @@
+---
+- name: Learn block rescue and always
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Simulate a network change workflow
+      block:
+        - name: Step 1 - Pre-change check
+          ansible.builtin.debug:
+            msg: "Pre-change check passed"
+
+        - name: Step 2 - Simulate a failed configuration task
+          ansible.builtin.fail:
+            msg: "Simulated configuration failure"
+
+        - name: Step 3 - Verify configuration
+          ansible.builtin.debug:
+            msg: "Configuration verification passed"
+
+      rescue:
+        - name: Handle the simulated failure
+          ansible.builtin.debug:
+            msg: "RESCUE: Record the failure and investigate"
+
+      always:
+        - name: Record final workflow status
+          ansible.builtin.debug:
+            msg: "ALWAYS: Run the final reporting step"

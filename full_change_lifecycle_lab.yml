@@ -1,0 +1,136 @@
+---
+- name: Simulate a complete network change lifecycle
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    # --------------------------------------------------
+    # Scenario 1: R1 - Change succeeds
+    # --------------------------------------------------
+    - name: "R1 - Successful change lifecycle"
+      block:
+        - name: "R1 - Pre-check"
+          ansible.builtin.set_fact:
+            r1_precheck_status: READY
+            r1_change_status: CHANGE_ATTEMPTED
+            r1_final_status: UNKNOWN
+
+        - name: "R1 - Simulate configuration"
+          ansible.builtin.debug:
+            msg: "SIMULATION ONLY: R1 configuration applied."
+
+        - name: "R1 - Simulate successful post-check"
+          ansible.builtin.set_fact:
+            r1_change_status: CHANGE_APPLIED
+            r1_final_status: SUCCESS
+
+      rescue:
+        - name: "R1 - Record unexpected workflow failure"
+          ansible.builtin.set_fact:
+            r1_final_status: CHANGE_FAILED_STATE_UNVERIFIED
+
+      always:
+        - name: "R1 - Business report"
+          ansible.builtin.debug:
+            msg:
+              device: R1
+              precheck_status: "{{ r1_precheck_status }}"
+              final_status: "{{ r1_final_status }}"
+
+    # --------------------------------------------------
+    # Scenario 2: R2 - Unreachable before change
+    # --------------------------------------------------
+    - name: "R2 - Change blocked by failed pre-check"
+      block:
+        - name: "R2 - Simulate pre-check connection failure"
+          ansible.builtin.fail:
+            msg: "SIMULATED ERROR: R2 is unreachable during pre-check."
+
+      rescue:
+        - name: "R2 - Block the change"
+          ansible.builtin.set_fact:
+            r2_precheck_status: UNREACHABLE
+            r2_change_status: NOT_ATTEMPTED
+            r2_final_status: BLOCKED
+
+        - name: "R2 - Explain why the change was blocked"
+          ansible.builtin.debug:
+            msg: >-
+              R2 is unreachable. Configuration was not attempted.
+              This is a simulated connection failure.
+
+      always:
+        - name: "R2 - Business report"
+          ansible.builtin.debug:
+            msg:
+              device: R2
+              precheck_status: "{{ r2_precheck_status }}"
+              change_status: "{{ r2_change_status }}"
+              final_status: "{{ r2_final_status }}"
+
+    # --------------------------------------------------
+    # Scenario 3: R3 - Change fails, recovery verified
+    # --------------------------------------------------
+    - name: "R3 - Failed change with verified recovery"
+      block:
+        - name: "R3 - Pre-check"
+          ansible.builtin.set_fact:
+            r3_precheck_status: READY
+            r3_change_status: CHANGE_ATTEMPTED
+            r3_recovery_status: NOT_ATTEMPTED
+            r3_recovery_verification: NOT_RUN
+            r3_final_status: UNKNOWN
+
+        - name: "R3 - Simulate configuration failure"
+          ansible.builtin.fail:
+            msg: "SIMULATED ERROR: R3 configuration task failed."
+
+      rescue:
+        - name: "R3 - Record original change failure"
+          ansible.builtin.set_fact:
+            r3_change_status: CHANGE_FAILED
+
+        - name: "R3 - Record recovery attempt"
+          ansible.builtin.set_fact:
+            r3_recovery_status: RECOVERY_ATTEMPTED
+
+        - name: "R3 - Simulate recovery action"
+          ansible.builtin.debug:
+            msg: "SIMULATION ONLY: R3 recovery action executed."
+
+        - name: "R3 - Simulate recovery post-check"
+          ansible.builtin.set_fact:
+            r3_recovery_verification: VERIFIED
+            r3_final_status: CHANGE_FAILED_RECOVERED
+
+      always:
+        - name: "R3 - Business report"
+          ansible.builtin.debug:
+            msg:
+              device: R3
+              precheck_status: "{{ r3_precheck_status }}"
+              change_status: "{{ r3_change_status }}"
+              recovery_status: "{{ r3_recovery_status }}"
+              recovery_verification: "{{ r3_recovery_verification }}"
+              final_status: "{{ r3_final_status }}"
+
+    # --------------------------------------------------
+    # Final validation
+    # --------------------------------------------------
+    - name: Validate all three business outcomes
+      ansible.builtin.assert:
+        that:
+          - r1_precheck_status == 'READY'
+          - r1_final_status == 'SUCCESS'
+          - r2_precheck_status == 'UNREACHABLE'
+          - r2_change_status == 'NOT_ATTEMPTED'
+          - r2_final_status == 'BLOCKED'
+          - r3_precheck_status == 'READY'
+          - r3_change_status == 'CHANGE_FAILED'
+          - r3_recovery_status == 'RECOVERY_ATTEMPTED'
+          - r3_recovery_verification == 'VERIFIED'
+          - r3_final_status == 'CHANGE_FAILED_RECOVERED'
+        success_msg: >-
+          PASS: All three simulated network change outcomes
+          match the expected business states.

@@ -1,0 +1,127 @@
+---
+- name: Read-only NTP configuration drift detection
+  hosts: cisco_routers
+  gather_facts: false
+
+  vars:
+    desired_ntp_server: "192.0.2.123"
+
+  tasks:
+    - name: Read configured NTP servers
+      cisco.ios.ios_command:
+        commands:
+          - "show running-config | include ^ntp server"
+      register: ntp_drift_result
+      ignore_errors: true
+      ignore_unreachable: true
+
+    - name: Classify NTP configuration state
+      ansible.builtin.set_fact:
+          ntp_drift_status: >-
+            {{
+              'UNREACHABLE'
+              if ntp_drift_result.unreachable | default(false)
+              else
+              'CONNECTION_TIMEOUT'
+              if (
+                ntp_drift_result.failed | default(false)
+                and
+                'timed out' in (ntp_drift_result.msg | default('') | lower)
+              )
+              else
+              'CHECK_FAILED'
+              if ntp_drift_result.failed | default(false)
+              else
+              'CHECK_FAILED'
+              if (
+                ntp_drift_result.stdout_lines is not defined
+                or ntp_drift_result.stdout_lines is not sequence
+                or ntp_drift_result.stdout_lines is string
+                or (ntp_drift_result.stdout_lines | length == 0)
+                or ntp_drift_result.stdout_lines[0] is not sequence
+                or ntp_drift_result.stdout_lines[0] is string
+              )
+              else
+              'MATCH'
+              if (
+                ntp_drift_result.stdout_lines[0]
+                | select('search', '^ntp server ' ~ desired_ntp_server ~ '$')
+                | list
+                | length
+              ) > 0
+              else
+              'DRIFT'
+            }}
+
+    - name: Display drift detection result
+      ansible.builtin.debug:
+          msg:
+            device: "{{ inventory_hostname }}"
+            status: "{{ ntp_drift_status }}"
+            desired_ntp_server: "{{ desired_ntp_server }}"
+            observed_ntp_lines: >-
+              {{
+                ntp_drift_result.stdout_lines[0]
+                if ntp_drift_status in ['MATCH', 'DRIFT']
+                else []
+              }}
+
+- name: Summarize NTP audit results
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Collect each router's audit status
+      ansible.builtin.set_fact:
+        device_results: >-
+          {{
+            device_results | default({})
+            | combine({
+                item: hostvars[item].ntp_drift_status
+                | default('CHECK_FAILED')
+              })
+          }}
+      loop: "{{ groups['cisco_routers'] }}"
+
+    - name: Build list of device statuses
+      ansible.builtin.set_fact:
+        device_statuses: "{{ device_results.values() | list }}"
+
+    - name: Calculate audit completeness
+      ansible.builtin.set_fact:
+        audit_status: >-
+          {{
+            'AUDIT_INCOMPLETE'
+            if (
+              device_statuses
+              | select('in', ['CONNECTION_TIMEOUT', 'UNREACHABLE', 'CHECK_FAILED'])
+              | list
+              | length > 0
+            )
+            else 'AUDIT_COMPLETE'
+          }}
+
+    - name: Calculate compliance status
+      ansible.builtin.set_fact:
+        compliance_status: >-
+          {{
+            'NON_COMPLIANT'
+            if 'DRIFT' in device_statuses
+            else
+            'UNKNOWN'
+            if (
+              device_statuses
+              | select('in', ['CONNECTION_TIMEOUT', 'UNREACHABLE', 'CHECK_FAILED'])
+              | list
+              | length > 0
+            )
+            else 'COMPLIANT'
+          }}
+
+    - name: Display overall NTP audit report
+      ansible.builtin.debug:
+        msg:
+          audit_status: "{{ audit_status }}"
+          compliance_status: "{{ compliance_status }}"
+          device_results: "{{ device_results }}"

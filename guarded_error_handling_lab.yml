@@ -1,0 +1,32 @@
+---
+- name: Learn block rescue always for network changes
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Simulate a configuration workflow
+      block:
+        - name: Simulate configuration attempt
+          ansible.builtin.debug:
+            msg: "SIMULATION ONLY: configuration attempt started."
+
+        - name: Simulate configuration failure
+          ansible.builtin.fail:
+            msg: "SIMULATED ERROR: the configuration task failed."
+
+        - name: This task should be skipped
+          ansible.builtin.debug:
+            msg: "This should not appear after the simulated failure."
+
+      rescue:
+        - name: Record that rescue was triggered
+          ansible.builtin.debug:
+            msg: >-
+              RESCUE: the configuration block failed.
+              Recovery or investigation would be required.
+
+      always:
+        - name: Always run the final diagnostic step
+          ansible.builtin.debug:
+            msg: "ALWAYS: final diagnostic/reporting step executed."

@@ -1,0 +1,51 @@
+---
+- name: Track change failure and recovery verification separately
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    change_status: "IN_PROGRESS"
+    recovery_status: "NOT_ATTEMPTED"
+    recovery_verified: false
+
+  tasks:
+    - name: Simulate a network change workflow
+      block:
+        - name: Simulate configuration failure
+          ansible.builtin.fail:
+            msg: "Simulated configuration failure"
+
+        - name: Verify changed configuration
+          ansible.builtin.debug:
+            msg: "Change verification passed"
+
+      rescue:
+        - name: Record original change failure
+          ansible.builtin.set_fact:
+            change_status: "FAILED"
+
+        - name: Simulate recovery action completing
+          ansible.builtin.debug:
+            msg: "Recovery command completed"
+
+        - name: Record recovery attempt
+          ansible.builtin.set_fact:
+            recovery_status: "ATTEMPTED"
+
+        - name: Simulate recovery verification failure
+          ansible.builtin.fail:
+            msg: "Simulated recovery verification failure"
+          ignore_errors: true
+
+        - name: Record that recovery is not verified
+          ansible.builtin.set_fact:
+            recovery_verified: false
+
+      always:
+        - name: Report final business state
+          ansible.builtin.debug:
+            msg:
+              change_status: "{{ change_status }}"
+              recovery_status: "{{ recovery_status }}"
+              recovery_verified: "{{ recovery_verified }}"

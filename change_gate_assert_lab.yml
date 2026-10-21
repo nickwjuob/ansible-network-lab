@@ -1,0 +1,27 @@
+---
+- name: Test Change Gate enforcement locally
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    change_gate_cases:
+      - device: R1
+        decision: ALLOW_REMEDIATION
+        expected_result: ALLOW
+
+      - device: R2
+        decision: SKIP_NO_CHANGE
+        expected_result: DENY
+
+      - device: R3
+        decision: BLOCK
+        expected_result: DENY
+
+  tasks:
+    - name: Process each simulated device
+      ansible.builtin.include_tasks: change_gate_assert_case.yml
+      loop: "{{ change_gate_cases }}"
+      loop_control:
+        loop_var: gate_case
+        label: "{{ gate_case.device }}"

@@ -1,0 +1,93 @@
+---
+- name: Initialize lifecycle status and gate decision
+  ansible.builtin.set_fact:
+    lifecycle_status: NOT_STARTED
+    change_gate_decision: >-
+      {{
+        'BLOCK'
+        if not (lifecycle_case.check_complete | bool)
+        or lifecycle_case.initial_health == 'UNKNOWN'
+        else
+        'SKIP_NO_CHANGE'
+        if lifecycle_case.initial_health == 'HEALTHY'
+        else
+        'ALLOW_REMEDIATION'
+        if lifecycle_case.initial_health == 'UNHEALTHY'
+        else
+        'BLOCK'
+      }}
+
+- name: Record initial decision
+  ansible.builtin.debug:
+    msg: "{{ lifecycle_case.device }} decision = {{ change_gate_decision }}"
+
+- name: Execute guarded change lifecycle
+  when: change_gate_decision == 'ALLOW_REMEDIATION'
+  block:
+    - name: Simulate remediation
+      ansible.builtin.debug:
+        msg: "{{ lifecycle_case.device }} simulated change task executed"
+      changed_when: lifecycle_case.change_succeeds | bool
+      failed_when: not (lifecycle_case.change_succeeds | bool)
+
+    - name: Simulate post-check
+      ansible.builtin.debug:
+        msg: "{{ lifecycle_case.device }} simulated post-check"
+      failed_when: not (lifecycle_case.postcheck_healthy | bool)
+
+    - name: Record successful verification
+      ansible.builtin.set_fact:
+        lifecycle_status: SUCCESS
+
+  rescue:
+    - name: Record change or verification failure
+      ansible.builtin.debug:
+        msg: >-
+          {{ lifecycle_case.device }} change or post-check failed;
+          starting recovery assessment
+
+    - name: Attempt recovery and handle its result
+      block:
+        - name: Simulate recovery attempt
+          ansible.builtin.debug:
+            msg: "{{ lifecycle_case.device }} simulated recovery attempted"
+          failed_when: not (lifecycle_case.recovery_succeeds | bool)
+
+        - name: Record verified recovery status
+          ansible.builtin.set_fact:
+            lifecycle_status: RECOVERED
+
+      rescue:
+        - name: Record recovery failure status
+          ansible.builtin.set_fact:
+            lifecycle_status: RECOVERY_FAILED
+
+        - name: Report recovery failure
+          ansible.builtin.debug:
+            msg: >-
+              {{ lifecycle_case.device }} recovery failed;
+              manual investigation is required
+
+  always:
+    - name: Report lifecycle processing completed
+      ansible.builtin.debug:
+        msg: >-
+          {{ lifecycle_case.device }} lifecycle processing completed;
+          current status = {{ lifecycle_status }}
+
+- name: Record blocked decision
+  ansible.builtin.set_fact:
+    lifecycle_status: BLOCKED
+  when: change_gate_decision == 'BLOCK'
+
+- name: Verify expected lifecycle status
+  ansible.builtin.assert:
+    that:
+      - lifecycle_status == lifecycle_case.expected_status
+    success_msg: >-
+      {{ lifecycle_case.device }} expected status verified:
+      {{ lifecycle_status }}
+    fail_msg: >-
+      {{ lifecycle_case.device }} expected
+      {{ lifecycle_case.expected_status }},
+      got {{ lifecycle_status }}

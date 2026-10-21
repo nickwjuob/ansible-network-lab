@@ -1,0 +1,35 @@
+---
+- name: Test Change Gate execution control locally
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    change_gate_cases:
+      - device: R1
+        check_complete: true
+        health: UNHEALTHY
+        expected_decision: ALLOW_REMEDIATION
+
+      - device: R2
+        check_complete: true
+        health: HEALTHY
+        expected_decision: SKIP_NO_CHANGE
+
+      - device: R3
+        check_complete: false
+        health: UNKNOWN
+        expected_decision: BLOCK
+
+      - device: R4
+        check_complete: true
+        health: UNKNOWN
+        expected_decision: BLOCK
+
+  tasks:
+    - name: Process each simulated device
+      ansible.builtin.include_tasks: change_gate_case_tasks.yml
+      loop: "{{ change_gate_cases }}"
+      loop_control:
+        loop_var: gate_case
+        label: "{{ gate_case.device }}"

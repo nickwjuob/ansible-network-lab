@@ -1,0 +1,46 @@
+# Secrets and credentials
+.env
+.env.*
+!.env.example
+*password*
+*secret*
+*credential*
+*token*
+*.pem
+*.key
+*.p12
+*.pfx
+vault-password-file
+
+# SSH private keys
+id_rsa
+id_ed25519
+id_ecdsa
+
+# Backups and temporary files
+backup/
+*.backup
+*.bak
+*.tmp
+*~
+*.swp
+
+# Generated reports and evidence
+audit_report.json
+evidence/
+
+# Python-generated files
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Editor and OS files
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Historical backup copies
+*.backup-before-*
+*.ini.backup-*
+*.yml.backup-*
