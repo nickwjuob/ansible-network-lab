@@ -1,0 +1,15 @@
+devices:
+  - name: R1
+    management_ip: 192.168.230.100
+    platform: cisco_ios
+    role: lab-router
+
+  - name: R2
+    management_ip: 192.168.230.101
+    platform: cisco_ios
+    role: lab-router
+
+  - name: R3
+    management_ip: 192.168.230.102
+    platform: cisco_ios
+    role: lab-router
