@@ -1,0 +1,32 @@
+name: Network Data CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate-network-data:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependency
+        run: pip install PyYAML==6.0.2
+
+      - name: Generate Ansible inventory
+        run: python scripts/generate_inventory.py
+
+      - name: Check whitespace errors
+        run: git diff --check
+
+      - name: Verify inventory is up to date
+        run: git diff --exit-code -- inventory.ini
