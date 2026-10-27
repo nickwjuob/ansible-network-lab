@@ -33,3 +33,30 @@ jobs:
 
       - name: Verify inventory is up to date
         run: git diff --exit-code -- inventory.ini
+
+  terraform-ci:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: iac-lab/local-baseline
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.17.0"
+          terraform_wrapper: false
+
+      - name: Check Terraform formatting
+        run: terraform fmt -check -recursive -diff
+
+      - name: Initialize providers without backend
+        run: terraform init -backend=false -input=false -no-color
+
+      - name: Validate Terraform configuration
+        run: terraform validate -no-color
