@@ -10,6 +10,6 @@ devices:
     role: lab-router
 
   - name: R3
-    management_ip: 192.168.230.199
+    management_ip: 192.168.230.102
     platform: cisco_ios
     role: lab-router
